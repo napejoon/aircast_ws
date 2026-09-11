@@ -34,7 +34,12 @@ flutter run --dart-define=AIRCAST_SIGNAL=wss://signal.example.com/ws
 ```
 
 `minSdkVersion` must be 23 or higher for `flutter_webrtc`; set it in
-`android/app/build.gradle` after the scaffold is generated.
+`android/app/build.gradle.kts` after the scaffold is generated (CI does the same
+with one `sed`).
+
+The manifest names `io.aircast.sender.MainActivity` and `.UsbCastService` in
+full, because the Gradle namespace `flutter create` derives from the project
+name is not the package these Kotlin files declare.
 
 ## Receiving the USB path
 

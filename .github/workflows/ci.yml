@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  server:
+    name: signalling server + end-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -r server/requirements.txt -r tools/requirements.txt
+      - name: Test
+        # tools/ carries the end-to-end test: two real WebRTC peers pair through
+        # the real server and decoded video has to move.
+        run: pytest server tools -q --asyncio-mode=auto
+
+  receiver:
+    name: receiver (GTK4 + GStreamer)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        # gtk4paintablesink is a *runtime* dependency, so it is deliberately not
+        # installed here — this job answers "does it compile and link", which is
+        # the question no developer machine in this project can answer locally.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libgtk-4-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libjson-glib-dev libsoup-3.0-dev
+      - name: Build
+        run: |
+          cmake -S receiver -B receiver/build -DCMAKE_C_FLAGS="-Wall -Werror"
+          cmake --build receiver/build
+
+  sender:
+    name: sender (Flutter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Restore the scaffold
+        # The generated platform scaffold is not committed; `flutter create`
+        # fills it in without touching the files that are.
+        working-directory: sender
+        run: flutter create --platforms=android,ios --org io.aircast --project-name aircast_sender .
+      - name: Analyse
+        working-directory: sender
+        run: |
+          flutter pub get
+          flutter analyze
+      - name: Test
+        working-directory: sender
+        run: flutter test
+
+  android:
+    name: sender (Android APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Restore the scaffold
+        working-directory: sender
+        run: flutter create --platforms=android --org io.aircast --project-name aircast_sender .
+      - name: Raise minSdk for flutter_webrtc
+        # flutter_webrtc needs 23; the scaffold's default is lower on older
+        # templates, and this is cheaper than committing a patched gradle file.
+        working-directory: sender/android/app
+        run: sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' build.gradle.kts || true
+      - name: Build
+        working-directory: sender
+        run: flutter build apk --debug

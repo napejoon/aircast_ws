@@ -5,13 +5,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
+    <!-- Fully qualified on purpose: the Gradle namespace `flutter create`
+         generates is derived from the project name, so a relative ".MainActivity"
+         would resolve to a class that does not exist. -->
     <application
         android:label="aircast"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
         <activity
-            android:name=".MainActivity"
+            android:name="io.aircast.sender.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/LaunchTheme"
@@ -30,7 +33,7 @@
         <!-- Android 14+ refuses getMediaProjection() unless this service is
              already in the foreground with this exact type. -->
         <service
-            android:name=".UsbCastService"
+            android:name="io.aircast.sender.UsbCastService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 

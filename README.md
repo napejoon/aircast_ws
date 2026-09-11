@@ -71,9 +71,12 @@ asserted to move.
 ## State
 
 `server/` runs and is tested (11 tests, including the end-to-end one).
-`sender/` and `receiver/` are written but have never been through a Flutter SDK
-or a C compiler — neither toolchain was available on the machine they were
-written on.
+`server/` and `tools/` run locally. `sender/` and `receiver/` have never been
+compiled on a developer machine here — neither toolchain was available — so
+`.github/workflows/ci.yml` is where they meet a compiler: the receiver is built
+with `-Wall -Werror` against GTK4 and GStreamer, and the sender is analysed,
+tested and built into a debug APK after CI restores the scaffold that is not
+committed.
 
 iOS needs one manual Xcode step (`sender/ios/README.md`): a Broadcast Upload
 Extension, which is what ReplayKit requires to see anything outside our own
