@@ -92,7 +92,7 @@ class CastSession {
   /// drop everything else so the receiver only ever sees two tails.
   Future<void> _preferCodecs(RTCPeerConnection pc) async {
     final caps = await getRtpSenderCapabilities('video');
-    final codecs = caps.codecs ?? const <RTCRtpCodecCapability>[];
+    final codecs = caps.codecs;
     bool named(RTCRtpCodecCapability c, String name) =>
         (c.mimeType ?? '').toLowerCase() == 'video/$name';
 

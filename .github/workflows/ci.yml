@@ -53,7 +53,10 @@ jobs:
         # The generated platform scaffold is not committed; `flutter create`
         # fills it in without touching the files that are.
         working-directory: sender
-        run: flutter create --platforms=android,ios --org io.aircast --project-name aircast_sender .
+        run: |
+          flutter create --platforms=android,ios --org io.aircast --project-name aircast_sender .
+          # The scaffold drops in a widget test for a MyApp that is not ours.
+          rm -f test/widget_test.dart
       - name: Analyse
         working-directory: sender
         run: |
