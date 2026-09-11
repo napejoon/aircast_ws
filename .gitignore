@@ -7,3 +7,26 @@ build/
 devel/
 install/
 log/
+
+# Flutter / Dart
+.dart_tool/
+.packages
+*.iml
+sender/android/.gradle/
+sender/ios/Pods/
+
+# CMake
+receiver/build/
+
+# Flutter / Dart
+.dart_tool/
+.packages
+*.iml
+sender/android/.gradle/
+sender/ios/Pods/
+
+# CMake
+receiver/build/
+
+# Python
+.pytest_cache/

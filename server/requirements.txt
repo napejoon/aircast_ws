@@ -1,0 +1,5 @@
+websockets>=13
+
+# tests only
+pytest
+pytest-asyncio

@@ -1,0 +1,47 @@
+# aircast sender
+
+Flutter screen sender. The UI is the other half of the receiver's: same dark
+palette, and the six digits the desktop shows in large type are typed back in
+large type here. A dot in the header stays green while the screen is actually
+being mirrored, so "am I still sharing?" is answerable at a glance. Two paths, per `docs/research/`:
+
+- **Network** — WebRTC, ICE forced through our own coturn, H.264 preferred with
+  VP8 as the mandatory fallback. `lib/signaling.dart`, `lib/session.dart`.
+- **USB (Android only)** — `VirtualDisplay → MediaCodec → Annex-B H.264 → local
+  socket`. `android/.../UsbCastService.kt`, reached from Dart through
+  `lib/usb.dart`.
+
+## iOS
+
+Whole-screen capture on iOS needs a Broadcast Upload Extension added by hand
+after the scaffold exists — `ios/README.md` has the five steps. The Dart side
+already asks for it.
+
+## Build
+
+The generated Flutter scaffold is not committed. Once, in this directory:
+
+```bash
+flutter create --platforms=android,ios --org io.aircast --project-name aircast_sender .
+```
+
+It will not overwrite the files that are here. Then:
+
+```bash
+flutter pub get
+flutter test
+flutter run --dart-define=AIRCAST_SIGNAL=wss://signal.example.com/ws
+```
+
+`minSdkVersion` must be 23 or higher for `flutter_webrtc`; set it in
+`android/app/build.gradle` after the scaffold is generated.
+
+## Receiving the USB path
+
+```bash
+adb forward tcp:27183 localabstract:aircast   # desktop port → phone socket
+gst-launch-1.0 tcpclientsrc host=127.0.0.1 port=27183 ! h264parse ! avdec_h264 ! autovideosink
+```
+
+Consent, the `mediaProjection` foreground service and the socket all live in
+`UsbCastService`; the Dart side only asks it to start.

@@ -1,0 +1,162 @@
+# coturn config for aircast — template
+#
+# Copy to /etc/turnserver.conf and replace every <PLACEHOLDER>.
+# Decision record: ticket #5 (https://github.com/napejoon/aircast_ws/issues/5)
+#
+# Option names below are checked against the coturn versions Ubuntu actually
+# ships — 4.5.2 on 22.04, 4.6.1 on 24.04 — NOT against coturn's master branch,
+# which documents options these builds do not have. Pull the README for the
+# installed build before changing anything here:
+#
+#   V=$(turnserver --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+#   curl -fsS "https://raw.githubusercontent.com/coturn/coturn/${V}/README.turnserver" \
+#        -o /root/README.turnserver.$V
+#
+# An option this build does not recognise is a WARNING, not an error: coturn
+# logs "Bad configuration format: <line>" and starts anyway with the option
+# silently ignored. Always check for that after a config change:
+#
+#   journalctl -u coturn | grep -i 'bad configuration'
+
+# ---------------------------------------------------------------- listeners
+# Default 3478 for UDP+TCP. Keep the default; ICE clients try it first.
+listening-port=3478
+
+# Default 5349 for TLS+DTLS.
+tls-listening-port=5349
+
+# Bind to the VPS's own address. Leaving this unset makes coturn listen on
+# every system IP, including any private interface.
+#
+# NOTE: setting this makes coturn lose a boot race on the packaged unit
+# (Debian #998680) — see the coturn.service.d drop-in in the runbook. Without
+# that drop-in the box comes up with coturn in `failed`.
+listening-ip=<VPS_PUBLIC_IPV4>
+
+# Only needed when the VPS sits behind NAT (the interface address differs from
+# the public one). Returned in XOR-RELAYED-ADDRESS. Leave commented out when
+# the public address is configured directly on the interface.
+#external-ip=<VPS_PUBLIC_IPV4>
+
+# DTLS listeners start by DEFAULT on these builds. README.turnserver documents
+# only --no-dtls ("Do not start DTLS client listeners") — there is no --dtls
+# option here, so do not add one expecting it to enable anything.
+
+# ------------------------------------------------------------- relay ports
+# Defaults are 49152-65535. That is 16384 ports for a service that will carry
+# a handful of concurrent sessions, and coturn's docs state no ports-per-session
+# figure, so this range is a deliberate, recorded choice rather than a formula.
+# Start here, and raise it if allocations ever fail.
+# KEEP IN SYNC with the firewall rules in docs/ops/provision-vps.md.
+min-port=49160
+max-port=49360
+
+# ------------------------------------------------------------------- auth
+# TURN REST: credentials are minted per session by the signalling server and
+# never stored here. username = "<expiry-unix-timestamp>:<opaque-id>",
+# password = base64(HMAC-SHA1(username, static-auth-secret)).
+use-auth-secret
+static-auth-secret=<SHARED_SECRET_HEX>
+
+# realm is required by the long-term credential mechanism.
+realm=<TURN_DOMAIN>
+
+# Nonce lifetime in seconds (default 600). This is the TURN protocol's
+# nonce-refresh interval, NOT the credential lifetime — the credential expires
+# at the timestamp embedded in its username.
+stale-nonce=600
+
+# --------------------------------------------------------------------- TLS
+# Certificate is read at process start. coturn has no SIGHUP reload
+# (coturn issues #725, #1446), so renewal requires a restart, which drops live
+# allocations. Plan the maintenance window.
+cert=/etc/letsencrypt/live/<TURN_DOMAIN>/fullchain.pem
+pkey=/etc/letsencrypt/live/<TURN_DOMAIN>/privkey.pem
+
+# ---------------------------------------------------------------- hardening
+# Refuse to relay to private, loopback, link-local and CGNAT ranges. Without
+# these a public TURN server can be used to reach anything the VPS can reach —
+# including the provider's metadata endpoint on 169.254.169.254.
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.0.0.0-192.0.0.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=198.18.0.0-198.19.255.255
+denied-peer-ip=::1
+denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
+denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255
+denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+
+# The server itself. coturn's own peer vetting (good_peer_addr()) checks only
+# multicast, loopback and the all-zero address — it will happily relay to this
+# host's own public IP, which reaches 3478/5349 and (later) the signalling port
+# from a source that IS the server, defeating any IP-based restriction there.
+# Add the IPv6 address as a second line if one is ever configured.
+denied-peer-ip=<VPS_PUBLIC_IPV4>
+
+no-multicast-peers
+
+# WebRTC media over a relay is always UDP, and the firewall only opens the relay
+# range for UDP. RFC 6062 TCP relay endpoints are ON by default and this
+# deployment never uses them: they are a second allocation type that lets any
+# holder of a minted credential open arbitrary outbound TCP from this VPS, and
+# ufw does not stop it (the relay dials out; ufw's default output policy is
+# ACCEPT). `turns:...?transport=tcp` is unaffected — that is TCP on the client
+# leg with a UDP relay allocation.
+# Do NOT also set no-udp-relay: coturn exits if both are set.
+no-tcp-relay
+
+# Loopback relaying is denied by default. Never enable allow-loopback-peers
+# outside a development box — coturn's own doc calls it testing-only.
+
+# Drop privileges after binding.
+proc-user=turnserver
+proc-group=turnserver
+
+# On these builds the admin CLI is ON by default — 127.0.0.1:5766, telnet,
+# EMPTY password (README.turnserver: "--no-cli  Turn OFF the CLI support.
+# By default it is always ON."). This line is what turns it off.
+# DO NOT delete it as redundant.
+no-cli
+
+# Ubuntu's coturn is built without Prometheus support (libprom/libpromhttp are
+# not in the archive, so configure disables it), so --prometheus does not exist
+# in this binary and setting it is a no-op with a warning. Metrics would need a
+# self-built coturn. Either way, never open 9641 to the internet.
+
+# ------------------------------------------------------------- abuse limits
+# All four default to 0 = unlimited. One static secret mints every credential
+# and a minted pair stays valid until the timestamp in its username, so these
+# ceilings are what bound the damage if the secret leaks — #5 priced the egress
+# at Vultr $0.01/GB over 2 TB, Hetzner SGP $8.49/TB.
+#
+# The two global limits are the ones that actually bite: per-user quota keys on
+# the opaque id, and an attacker holding the secret simply mints new ids.
+# Tune after the first real session; raise if legitimate calls start failing.
+# Hitting total-quota appears in the log as a 486 Allocation Quota Reached.
+# NOTE THE UNIT: coturn's --max-bps and --bps-capacity are BYTES per second,
+# not bits. 1000000 B/s = 8 Mbit/s. #8 caps the sender at 6 Mbit/s (1080p
+# preset), so this leaves headroom without being unlimited.
+max-bps=1000000          # 8 Mbit/s per allocation — above #8's 1080p ceiling
+bps-capacity=50000000    # 400 Mbit/s global; only meaningful alongside max-bps
+total-quota=100          # global concurrent allocations
+user-quota=20            # per opaque-id — deliberately loose, ICE can need several
+
+# ------------------------------------------------------------------ logging
+# "stdout" is a documented special value for --log-file: everything goes to
+# stdout, which the packaged systemd unit hands to journald. Read it with
+# `journalctl -u coturn`.
+#
+# Do NOT set a path under /var/log — the unit runs as User=turnserver and the
+# package creates no log directory, so the open fails and coturn falls back
+# into its own PrivateTmp namespace, where the file is unreachable from the
+# host and is destroyed on restart.
+log-file=stdout
+
+# Uncomment only while debugging; it is extremely chatty.
+#verbose

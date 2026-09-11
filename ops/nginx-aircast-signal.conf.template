@@ -1,0 +1,44 @@
+# TLS termination for the signalling server. The server itself binds
+# 127.0.0.1 only and speaks plain ws://, so this is the only thing on the
+# public port. Install as /etc/nginx/sites-available/aircast-signal and
+# replace SIGNAL_DOMAIN.
+#
+# The certificate is the same certbot-managed pair the coturn runbook
+# provisions (docs/ops/provision-vps.md §2); if you reuse turn.example.com,
+# point both blocks at that lineage rather than issuing a second one.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name SIGNAL_DOMAIN;
+    # certbot's webroot challenge, and nothing else over plaintext.
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name SIGNAL_DOMAIN;
+
+    ssl_certificate     /etc/letsencrypt/live/SIGNAL_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/SIGNAL_DOMAIN/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location /ws {
+        proxy_pass http://127.0.0.1:8443;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        # The server throttles by client IP, so it has to see the real one.
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host $host;
+        # A pairing sits idle between joining and the offer; the default 60 s
+        # would drop it.
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    location / { return 404; }
+}
