@@ -53,6 +53,12 @@ class Signaling {
   void Function(String reason)? onClosed;
 
   Future<void> connect() async {
+    // Whichever of these the caller does not await still gets an error on
+    // failure, and an unlistened completer error is an uncaught async error —
+    // fatal in a test, and a crash in the app.
+    _turn.future.ignore();
+    _peer.future.ignore();
+
     final channel = WebSocketChannel.connect(url);
     _channel = channel;
     await channel.ready;

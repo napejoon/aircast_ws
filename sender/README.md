@@ -33,9 +33,9 @@ flutter test
 flutter run --dart-define=AIRCAST_SIGNAL=wss://signal.example.com/ws
 ```
 
-`minSdkVersion` must be 23 or higher for `flutter_webrtc`; set it in
-`android/app/build.gradle.kts` after the scaffold is generated (CI does the same
-with one `sed`).
+In `android/app/build.gradle.kts`, after the scaffold is generated, set
+`minSdk = 23` (`flutter_webrtc`'s floor) and `compileSdk = 35` (androidx.fragment
+refuses to be compiled against anything below 34). CI does both with `sed`.
 
 The manifest names `io.aircast.sender.MainActivity` and `.UsbCastService` in
 full, because the Gradle namespace `flutter create` derives from the project

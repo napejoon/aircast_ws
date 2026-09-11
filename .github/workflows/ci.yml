@@ -82,11 +82,15 @@ jobs:
       - name: Restore the scaffold
         working-directory: sender
         run: flutter create --platforms=android --org io.aircast --project-name aircast_sender .
-      - name: Raise minSdk for flutter_webrtc
-        # flutter_webrtc needs 23; the scaffold's default is lower on older
-        # templates, and this is cheaper than committing a patched gradle file.
+      - name: Pin the SDK levels
+        # flutter_webrtc needs minSdk 23, and androidx.fragment refuses to be
+        # compiled against anything below 34. Cheaper than committing a patched
+        # gradle file that the scaffold would have to merge with.
         working-directory: sender/android/app
-        run: sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' build.gradle.kts || true
+        run: |
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' build.gradle.kts
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/' build.gradle.kts
+          grep -E 'minSdk|compileSdk' build.gradle.kts
       - name: Build
         working-directory: sender
         run: flutter build apk --debug
