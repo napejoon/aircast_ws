@@ -34,7 +34,7 @@ flutter run --dart-define=AIRCAST_SIGNAL=wss://signal.example.com/ws
 ```
 
 In `android/app/build.gradle.kts`, after the scaffold is generated, set
-`minSdk = 23` (`flutter_webrtc`'s floor) and `compileSdk = 35` (androidx.fragment
+`minSdk = 23` (`flutter_webrtc`'s floor) and `compileSdk = 36` (what flutter_webrtc 1.6 demands; androidx.fragment
 refuses to be compiled against anything below 34). CI does both with `sed`.
 
 The manifest names `io.aircast.sender.MainActivity` and `.UsbCastService` in
