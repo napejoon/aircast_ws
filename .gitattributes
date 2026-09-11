@@ -1,0 +1,17 @@
+# LF everywhere, in the repository and in the working tree.
+#
+# Not a style preference: ops/aircast-signal.service and the coturn and nginx
+# templates are read by Linux daemons, and a CRLF sneaking into a systemd unit
+# or a shell snippet fails in ways that read as a config bug. Checking out LF
+# on Windows too keeps what is edited identical to what is deployed.
+* text=auto eol=lf
+
+# Things git must never touch.
+*.png binary
+*.jpg binary
+*.ico binary
+*.mkv binary
+*.jar binary
+*.keystore binary
+*.aar binary
+gradlew.bat text eol=crlf
