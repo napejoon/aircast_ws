@@ -1,0 +1,139 @@
+# Tag -> draft release. Publishing is a human step, and so is signing.
+#
+# This workflow deliberately cannot finish a release: it produces the installer,
+# attests it, and leaves a DRAFT. The maintainer then downloads the MSI, hashes
+# it locally, writes and signs aircast-update.json on an offline machine, and
+# publishes. The signing key never enters Actions, which is the one property
+# that survives a compromise of this repository — see docs/threat-model.md.
+#
+# Every `uses:` is pinned to a commit SHA: a tag is a moving reference, and the
+# job that mints the attestation is where that matters most.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows installer
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Keep MSYS2 tools away from CRLF
+        shell: bash
+        run: git config --global core.autocrlf input
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+        with:
+          msystem: UCRT64
+          update: true
+          # No cache restore in a job that produces a release artifact: a
+          # poisoned cache entry is an unreviewed input to the thing we attest.
+          cache: false
+          pacboy: >-
+            gcc:p cmake:p ninja:p pkgconf:p ntldd:p
+            gtk4:p gstreamer:p gst-plugins-base:p gst-plugins-good:p
+            gst-plugins-bad:p gst-plugins-bad-libs:p gst-plugins-rs:p
+            gst-libav:p json-glib:p libsoup3:p glib-networking:p libsodium:p
+
+      - name: Version
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          cmake -S receiver -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAIRCAST_VERSION="$VERSION"
+          cmake --build build
+
+      - name: Self-test
+        run: ./build/aircast-receiver.exe --selftest
+
+      - name: Bundle
+        run: bash tools/bundle-windows.sh build dist/aircast
+
+      - name: Smoke test the bundle
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          $env:XDG_DATA_DIRS = "C:\nope"
+          cd dist\aircast\bin
+          foreach ($e in 'gtk4paintablesink','vp8dec','webrtcbin','rtph264depay','h264parse','matroskamux','decodebin') {
+            .\gst-inspect-1.0.exe $e > $null
+            if ($LASTEXITCODE -ne 0) { throw "missing element: $e" }
+          }
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 7.0.0
+          wix build installer/aircast.wxs -arch x64 -d Ver=$env:VERSION -b stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
+          wix msi validate -ice ICE105 "Aircast-Receiver-$env:VERSION-x64.msi"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: msi
+          path: Aircast-Receiver-*-x64.msi
+          if-no-files-found: error
+
+  attest:
+    name: Attest provenance
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      # This job contains no project code on purpose: it downloads the exact
+      # artifact that will be released and does one thing to it.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: msi
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: Aircast-Receiver-*-x64.msi
+
+  draft:
+    name: Draft release
+    needs: attest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: msi
+      - name: Release notes
+        run: |
+          cat > notes.md <<'NOTES'
+          Windows will show "Windows protected your PC" — the installer is not
+          code-signed. Click **More info -> Run anyway**, or do not install it.
+
+          Before this release is published, `aircast-update.json` and
+          `aircast-update.json.minisig` must be attached. Without them every
+          installed copy reports that it could not verify an update.
+
+          This bundle redistributes GLib, GTK and GStreamer under the LGPL; the
+          corresponding sources are the MSYS2 packages named in
+          `tools/bundle-windows.sh`.
+          NOTES
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        # It stays a draft until a human has verified the attestation, hashed the
+        # MSI locally and signed the manifest offline. Publishing from CI would
+        # make the Actions token enough to ship an update notice, which is
+        # exactly what the offline key exists to prevent.
+        run: |
+          gh release create "$TAG" Aircast-Receiver-*-x64.msi \
+            --repo "$GITHUB_REPOSITORY" --draft --verify-tag --notes-file notes.md
