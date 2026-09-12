@@ -37,6 +37,23 @@ flutter test
 flutter run --dart-define=AIRCAST_SIGNAL=wss://signal.example.com/ws
 ```
 
+## An APK for a bring-up
+
+Both of the things a bring-up needs to change are compile-time constants —
+`String.fromEnvironment` is resolved by the Dart compiler — so pointing the app
+at a different relay means building another APK. The Actions tab has a
+**Sender APK (bring-up)** workflow that takes them as inputs:
+
+- `AIRCAST_SIGNAL` — where the signalling server is. The committed default is
+  `wss://localhost:8443/ws`, which on a tablet means the tablet.
+- `AIRCAST_RELAY` — `false` drops the relay-only ICE rule, which is what a LAN
+  with no coturn needs. It is `true` everywhere else, and deliberately: every
+  frame going through our own TURN is what keeps the two peers from learning
+  each other's addresses.
+
+It produces a debug APK, because a release build is unsigned by design and
+Android will not install it.
+
 The manifest names `io.aircast.sender.MainActivity` and `.UsbCastService` in
 full, because the Gradle namespace `flutter create` derives from the project
 name is not the package these Kotlin files declare.
