@@ -241,7 +241,10 @@ jobs:
           # the last series without that gate, and it has the <Files> harvesting
           # this installer is built on.
           dotnet tool install --global wix --version 5.0.2
-          wix build installer/aircast.wxs -arch x64 -d Ver=$env:VERSION -d Stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
+          # The dialogs are an extension, not part of the toolset, and its
+          # version has to track wix's own or the build refuses to load it.
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
           # wix build runs no ICEs of its own. ICE105 is the dual-purpose-package
           # gate, and whether <Files> harvesting passes it is unsourced — so it
           # is a CI step rather than an assumption.
