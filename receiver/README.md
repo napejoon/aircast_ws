@@ -69,6 +69,7 @@ cmake -B build && cmake --build build
 | `--code` | pairing code; generated and displayed when omitted |
 | `--record-dir` | where the record button writes `aircast-<timestamp>.mkv` (default: home) |
 | `--latency` | jitter buffer in ms, default 200; first knob against the 200-500 ms budget |
+| `--no-relay` | allow direct ICE, for LAN bring-up only — both peers then learn each other's address |
 
 Test it without a phone:
 

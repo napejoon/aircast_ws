@@ -54,6 +54,25 @@ cd sender && flutter create --platforms=android,ios --org io.aircast --project-n
 flutter run --dart-define=AIRCAST_SIGNAL=ws://<host>:8443/ws
 ```
 
+## LAN bring-up
+
+Relay-only ICE is the product's privacy promise and the default on both sides.
+Getting a phone and a desktop talking for the first time is easier without a
+TURN server in the middle, so both ends take an explicit opt-out — and both say
+so when it is on:
+
+```bash
+# the signalling server has to be reachable from the phone, not just loopback
+AIRCAST_BIND=0.0.0.0 AIRCAST_TURN_SECRET=dev   AIRCAST_TURN_URLS=turn:127.0.0.1:3478 python server/aircast_signal.py
+
+./receiver/build/aircast-receiver --signal ws://<desktop-lan-ip>:8443 --no-relay
+
+flutter run --dart-define=AIRCAST_SIGNAL=ws://<desktop-lan-ip>:8443             --dart-define=AIRCAST_RELAY=false
+```
+
+With the flags off — which is what ships — the two peers only ever see the
+relay's address.
+
 ## Testing without a phone
 
 `tools/fake_sender.py` is a real WebRTC peer speaking the same protocol, so the
