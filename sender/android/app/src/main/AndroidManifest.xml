@@ -1,6 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- libwebrtc's NetworkMonitor asks ConnectivityService for the active
+         network as PeerConnection comes up. Without this the call throws
+         SecurityException into JNI, where jvm.cc line 81 turns an unexpected
+         Java exception into RTC_CHECK(false) — the process aborts on
+         network_thread with no Dart error and no crash dialog, four seconds
+         after pairing. flutter_webrtc declares nothing in its own manifest, so
+         the permission has to be here. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
