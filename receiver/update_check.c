@@ -61,6 +61,24 @@ aircast_ver_num (const char *s)
   return (gint64) a * 1000000 + (gint64) b * 1000 + c;
 }
 
+/* What a verified manifest means, given what is installed and the highest
+ * version ever verified. Its own line because the equality case is the whole
+ * subtlety: the manifest that raised the high-water mark is served again every
+ * day until the user actually goes and installs it, and folding that into a
+ * `candidate <= MAX(installed, seen)` test made the second check call the
+ * current release a rollback attack, permanently.
+ *
+ *   -1  older than something already verified: a replay, and reported
+ *    0  nothing newer than what is running
+ *    1  an update to announce */
+static int
+update_verdict (gint64 candidate, gint64 installed, gint64 seen)
+{
+  if (candidate < seen)
+    return -1;
+  return candidate > installed ? 1 : 0;
+}
+
 /* ---------------------------------------------------------------- signature */
 
 /* minisign's container, with the parts we deliberately do not read:
@@ -325,10 +343,10 @@ check_thread (GTask *task, gpointer source, gpointer task_data, GCancellable *ca
    * user backwards — and the attempt is reported rather than swallowed. */
   gint64 installed = aircast_ver_num (req->current_version);
   gint64 seen = update->high_water ? aircast_ver_num (update->high_water) : -1;
-  gint64 floor = MAX (installed, seen);
+  int verdict = update_verdict (candidate, installed, seen);
 
-  if (candidate <= floor) {
-    if (candidate > installed) {
+  if (verdict <= 0) {
+    if (verdict < 0) {
       update->status = g_strdup_printf (
           "Update check: refused an older update manifest (highest seen: v%s)",
           update->high_water ? update->high_water : "?");
@@ -463,6 +481,16 @@ aircast_update_selftest (void)
   g_assert (aircast_ver_num ("99999.0.0") == -1);
   g_assert (aircast_ver_num ("1.2") == -1);
   g_assert (aircast_ver_num (NULL) == -1);
+
+  /* The regression this helper exists for: after 2.0.0 has been announced once,
+   * the same manifest arrives again tomorrow and must still be an update, not a
+   * rollback attack. */
+  const gint64 v1 = 1000000, v2 = 2000000;
+  g_assert (update_verdict (v2, v1, -1) == 1);   /* first sight of 2.0.0    */
+  g_assert (update_verdict (v2, v1, v2) == 1);   /* and every day after     */
+  g_assert (update_verdict (v1, v1, v2) == -1);  /* replay of an older one  */
+  g_assert (update_verdict (v1, v1, -1) == 0);   /* nothing new             */
+  g_assert (update_verdict (v1, v2, -1) == 0);   /* running ahead of it     */
 
   unsigned char pk[32], sk[64];
   crypto_sign_keypair (pk, sk);

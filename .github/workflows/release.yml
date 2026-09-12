@@ -86,6 +86,30 @@ jobs:
           "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
           if ($msi.Length -lt 100MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
 
+      - name: The layout the MSI actually installs
+        shell: pwsh
+        # The one check that looks at what a user ends up with rather than at
+        # what we staged. See ci.yml.
+        run: |
+          $msi = (Get-Item "Aircast-Receiver-$env:VERSION-x64.msi").FullName
+          $dir = Join-Path $PWD "extracted"
+          $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$msi`"", '/qn', "TARGETDIR=`"$dir`""
+          if ($p.ExitCode -ne 0) { throw "administrative install failed with $($p.ExitCode)" }
+          $exe = Get-ChildItem $dir -Recurse -Filter aircast-receiver.exe | Select-Object -First 1
+          if (-not $exe) { throw "the package contains no aircast-receiver.exe" }
+          foreach ($pat in 'libgtk-4-*.dll', 'libgstreamer-1.0-*.dll') {
+            if (-not (Get-ChildItem $exe.Directory.FullName -Filter $pat)) {
+              throw "$pat is not beside the installed exe ($($exe.Directory.FullName))"
+            }
+          }
+          $root = Split-Path $exe.Directory.FullName -Parent
+          $schemas = Join-Path $root "share\glib-2.0\schemas\gschemas.compiled"
+          if (-not (Test-Path $schemas)) { throw "no compiled schemas at $schemas" }
+          "installed exe: $($exe.FullName)"
+          # The extraction is a copy of the whole bundle; upload-artifact globs
+          # the working directory, so it must not be left lying next to the MSI.
+          Remove-Item $dir -Recurse -Force
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: msi

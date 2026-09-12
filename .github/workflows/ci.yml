@@ -182,8 +182,10 @@ jobs:
         # The tag is the only source of truth. A non-tag build stamps 0.0.0, so
         # every real release compares newer than anything CI produced by hand.
         run: |
-          V="${GITHUB_REF_NAME#v}"
-          case "$GITHUB_REF_NAME" in v*) ;; *) V="0.0.0" ;; esac
+          # On the ref TYPE, not on the name: a branch called v2-something is
+          # not a release, and matching the name stamped its suffix as a version.
+          V=0.0.0
+          if [ "$GITHUB_REF_TYPE" = tag ]; then V="${GITHUB_REF_NAME#v}"; fi
           echo "VERSION=$V" >> "$GITHUB_ENV"
 
       - name: Build
@@ -239,6 +241,36 @@ jobs:
           $msi = Get-Item "Aircast-Receiver-$env:VERSION-x64.msi"
           "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
           if ($msi.Length -lt 100MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
+
+      - name: The layout the MSI actually installs
+        shell: pwsh
+        # Size proves the harvest found bytes, not that it put them anywhere
+        # useful: the exe was declared at the install root while every DLL
+        # harvested into bin\, which installs a program that cannot start. The
+        # smoke test cannot catch it — it looks at the staged tree, which was
+        # always right. An administrative install extracts the real layout
+        # without installing anything or needing elevation.
+        run: |
+          $msi = (Get-Item "Aircast-Receiver-$env:VERSION-x64.msi").FullName
+          $dir = Join-Path $PWD "extracted"
+          $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$msi`"", '/qn', "TARGETDIR=`"$dir`""
+          if ($p.ExitCode -ne 0) { throw "administrative install failed with $($p.ExitCode)" }
+          $exe = Get-ChildItem $dir -Recurse -Filter aircast-receiver.exe | Select-Object -First 1
+          if (-not $exe) { throw "the package contains no aircast-receiver.exe" }
+          # Static imports: the loader takes these from the exe's own directory.
+          foreach ($pat in 'libgtk-4-*.dll', 'libgstreamer-1.0-*.dll') {
+            if (-not (Get-ChildItem $exe.Directory.FullName -Filter $pat)) {
+              throw "$pat is not beside the installed exe ($($exe.Directory.FullName))"
+            }
+          }
+          # And the schemas, which main.c reaches by walking up out of bin.
+          $root = Split-Path $exe.Directory.FullName -Parent
+          $schemas = Join-Path $root "share\glib-2.0\schemas\gschemas.compiled"
+          if (-not (Test-Path $schemas)) { throw "no compiled schemas at $schemas" }
+          "installed exe: $($exe.FullName)"
+          # An administrative install also drops a copy of the package itself in
+          # TARGETDIR, so the extraction cannot be left where the upload globs.
+          Remove-Item $dir -Recurse -Force
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
