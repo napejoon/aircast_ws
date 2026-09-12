@@ -117,21 +117,26 @@ async def test_bad_frames_are_refused(endpoint, frame):
 
 
 @pytest.mark.asyncio
-async def test_a_receiver_guessing_codes_is_cut_off(strict_endpoint):
+async def test_a_sender_guessing_codes_is_cut_off(strict_endpoint):
+    # The sender is the side that types a code it was told. Typing one nobody
+    # is waiting on is the only thing that looks like guessing.
     for _ in range(2):
-        ws = await join(strict_endpoint, "999999", "receiver")
+        ws = await join(strict_endpoint, "999999", "sender")
         assert (await recv(ws))["type"] == "joined"
         await ws.close()
 
-    ws = await join(strict_endpoint, "888888", "receiver")
+    ws = await join(strict_endpoint, "888888", "sender")
     assert (await recv(ws)) == {"type": "error", "message": "too many attempts"}
     await ws.close()
 
 
 @pytest.mark.asyncio
-async def test_a_sender_arriving_first_is_not_charged_a_miss(strict_endpoint):
+async def test_a_receiver_arriving_first_is_not_charged_a_miss(strict_endpoint):
+    # The receiver invents the code and displays it, so it is always first and
+    # its code is never already waiting. Charging it spent the program's own
+    # budget on starting up.
     for code in ("111111", "222222", "333333"):
-        ws = await join(strict_endpoint, code, "sender")
+        ws = await join(strict_endpoint, code, "receiver")
         assert (await recv(ws))["type"] == "joined"
         await ws.close()
 
@@ -140,14 +145,31 @@ async def test_a_sender_arriving_first_is_not_charged_a_miss(strict_endpoint):
 async def test_the_throttle_buckets_by_forwarded_client_not_by_the_proxy(strict_endpoint):
     # Two misses from one client must not spend the next client's budget.
     for _ in range(2):
-        ws = await join(strict_endpoint, "999999", "receiver", forwarded_for="203.0.113.9")
+        ws = await join(strict_endpoint, "999999", "sender", forwarded_for="203.0.113.9")
         assert (await recv(ws))["type"] == "joined"
         await ws.close()
 
-    blocked = await join(strict_endpoint, "888888", "receiver", forwarded_for="203.0.113.9")
+    blocked = await join(strict_endpoint, "888888", "sender", forwarded_for="203.0.113.9")
     assert (await recv(blocked))["type"] == "error"
     await blocked.close()
 
-    other = await join(strict_endpoint, "777777", "receiver", forwarded_for="198.51.100.4")
+    other = await join(strict_endpoint, "777777", "sender", forwarded_for="198.51.100.4")
     assert (await recv(other))["type"] == "joined"
     await other.close()
+
+
+@pytest.mark.asyncio
+async def test_a_client_cannot_mint_itself_a_fresh_bucket(strict_endpoint):
+    # A proxy appends what it saw to whatever the client sent, so a client that
+    # sends its own X-Forwarded-For controls the first element and nothing else.
+    # Reading that element let one client guess for as long as it liked.
+    for i in range(2):
+        ws = await join(strict_endpoint, "999999", "sender",
+                        forwarded_for=f"10.0.0.{i}, 203.0.113.9")
+        assert (await recv(ws))["type"] == "joined"
+        await ws.close()
+
+    blocked = await join(strict_endpoint, "888888", "sender",
+                         forwarded_for="10.0.0.99, 203.0.113.9")
+    assert (await recv(blocked))["type"] == "error"
+    await blocked.close()

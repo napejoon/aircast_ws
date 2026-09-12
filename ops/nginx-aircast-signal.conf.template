@@ -3,14 +3,21 @@
 # public port. Install as /etc/nginx/sites-available/aircast-signal and
 # replace SIGNAL_DOMAIN.
 #
-# The certificate is the same certbot-managed pair the coturn runbook
-# provisions (docs/ops/provision-vps.md §2); if you reuse turn.example.com,
-# point both blocks at that lineage rather than issuing a second one.
+# SIGNAL_DOMAIN and CERT_LINEAGE are two placeholders on purpose. One
+# certificate covers both names, and certbot names the lineage directory after
+# the first -d it was given — so the name clients type and the directory the
+# key sits in are not the same string. Two names because SNI is the only thing
+# that can tell a TURNS handshake from an HTTPS one when both share 443:
+# libwebrtc sends no ALPN, and no API exposes one to set.
 
 server {
     listen 80;
     listen [::]:80;
-    server_name SIGNAL_DOMAIN;
+    # Both names: one certificate covers them, so renewal answers a challenge
+    # for either, and the challenge has to land on a block that serves the
+    # webroot. A :80 block naming only one of them makes renewal fail for the
+    # other around day 60, inside a timer, quietly.
+    server_name SIGNAL_DOMAIN CERT_LINEAGE;
     # certbot's webroot challenge, and nothing else over plaintext.
     location /.well-known/acme-challenge/ { root /var/www/html; }
     location / { return 301 https://$host$request_uri; }
@@ -19,11 +26,14 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    http2 on;
+    # No `http2 on;`: the directive arrived in nginx 1.25.1 and Ubuntu 24.04
+    # ships 1.24, where it is unknown and `nginx -t` fails outright. It would
+    # buy one long-lived WebSocket nothing in any case — nginx does not
+    # implement the extended CONNECT that carries WebSocket over HTTP/2.
     server_name SIGNAL_DOMAIN;
 
-    ssl_certificate     /etc/letsencrypt/live/SIGNAL_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/SIGNAL_DOMAIN/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/CERT_LINEAGE/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/CERT_LINEAGE/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
     location /ws {
@@ -31,8 +41,11 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        # The server throttles by client IP, so it has to see the real one.
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Overwrite, never append. $proxy_add_x_forwarded_for keeps whatever the
+        # client sent and adds the real address after it, so a client that sends
+        # its own header controls what a naive reader sees — and the per-IP
+        # throttle is the only defence a 6-digit code has.
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header Host $host;
         # A pairing sits idle between joining and the offer; the default 60 s
         # would drop it.
@@ -42,3 +55,13 @@ server {
 
     location / { return 404; }
 }
+
+# When nginx also fronts 443 for TURNS — docs/ops/provision-vps.md, the section
+# on a network that leaves only 443 — this vhost stops owning the public port.
+# The stream block does, and this becomes:
+#
+#     listen 127.0.0.1:8444 ssl proxy_protocol;
+#     set_real_ip_from 127.0.0.1;
+#     real_ip_header proxy_protocol;
+#
+# Without those last two the throttle sees 127.0.0.1 for every client on earth.
