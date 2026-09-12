@@ -3,15 +3,25 @@ name: CI
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A superseded branch build is wasted work; a superseded tag build is a lost
+  # release, so tags are never cancelled.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   server:
     name: signalling server + end-to-end
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install
@@ -25,7 +35,7 @@ jobs:
     name: receiver (GTK4 + GStreamer)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install
         # gtk4paintablesink is a *runtime* dependency, so it is deliberately not
         # installed here — this job answers "does it compile and link", which is
@@ -36,18 +46,22 @@ jobs:
             build-essential cmake pkg-config libgtk-4-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev \
-            libjson-glib-dev libsoup-3.0-dev
+            libjson-glib-dev libsoup-3.0-dev libsodium-dev
       - name: Build
         run: |
           cmake -S receiver -B receiver/build -DCMAKE_C_FLAGS="-Wall -Werror"
           cmake --build receiver/build
+      - name: Self-test
+        # Version comparison (the rollback defence) and the signature verifier,
+        # exercised against a throwaway key rather than described.
+        run: ./receiver/build/aircast-receiver --selftest
 
   sender:
     name: sender (Flutter)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
       - name: Restore the scaffold
@@ -71,12 +85,12 @@ jobs:
     name: sender (Android APK)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: "17"
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
       - name: Restore the scaffold
@@ -104,25 +118,33 @@ jobs:
       # you get a plugin that refuses to load.
       PLUGINS_RS_TAG: "0.13.7"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-tools
       # A long build whose inputs never move: a pinned tag and a pinned image.
       # Uncached, this job would dominate every run.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/bin
             ~/.cargo/registry
-            gst-plugins-rs/target
+            ~/plugins-rs-target
           key: paintablesink-${{ runner.os }}-${{ env.PLUGINS_RS_TAG }}
       - name: Build
         run: |
-          command -v cargo-cbuild >/dev/null || cargo install cargo-c --locked
-          test -d gst-plugins-rs || git clone --depth 1 --branch "$PLUGINS_RS_TAG" https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git
+          # Deliberately not "command -v cargo-cbuild || install": a restored
+          # cache entry is an unreviewed binary, and this is the job that builds
+          # a plugin the receiver loads.
+          cargo install cargo-c --locked --force
+          # Always a fresh clone: the cache used to restore gst-plugins-rs/target,
+          # which made the directory exist, which skipped the clone, which left
+          # cargo with no Cargo.toml. The build cache lives outside the tree now.
+          rm -rf gst-plugins-rs
+          git clone --depth 1 --branch "$PLUGINS_RS_TAG" https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git
           cd gst-plugins-rs
+          export CARGO_TARGET_DIR="$HOME/plugins-rs-target"
           cargo cbuild -p gst-plugin-gtk4 --release
           sudo -E $(command -v cargo) cinstall -p gst-plugin-gtk4 --release --prefix=/usr/local
       - name: Register
@@ -131,3 +153,94 @@ jobs:
         run: |
           export GST_PLUGIN_PATH=/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0:/usr/local/lib/gstreamer-1.0
           gst-inspect-1.0 gtk4paintablesink
+
+  windows:
+    name: receiver (Windows bundle + MSI)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Keep MSYS2 tools away from CRLF
+        shell: bash
+        run: git config --global core.autocrlf input
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+        with:
+          # The default is MINGW64, which upstream has deprecated.
+          msystem: UCRT64
+          update: true
+          pacboy: >-
+            gcc:p cmake:p ninja:p pkgconf:p ntldd:p
+            gtk4:p gstreamer:p gst-plugins-base:p gst-plugins-good:p
+            gst-plugins-bad:p gst-plugins-bad-libs:p gst-plugins-rs:p
+            gst-libav:p json-glib:p libsoup3:p glib-networking:p libsodium:p
+
+      - name: Version
+        # The tag is the only source of truth. A non-tag build stamps 0.0.0, so
+        # every real release compares newer than anything CI produced by hand.
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          case "$GITHUB_REF_NAME" in v*) ;; *) V="0.0.0" ;; esac
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          which cmake   # must be /ucrt64/bin/cmake, not the runner's
+          cmake -S receiver -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAIRCAST_VERSION="$VERSION"
+          cmake --build build
+
+      - name: The plugins with no fallback
+        # gtk4paintablesink is how anything reaches the screen, and vp8dec is
+        # the floor for phones libwebrtc will not let send H.264. Missing either
+        # is a black window, not an error.
+        run: |
+          gst-inspect-1.0 gtk4paintablesink > /dev/null
+          gst-inspect-1.0 vp8dec > /dev/null
+
+      - name: Self-test
+        run: ./build/aircast-receiver.exe --selftest
+
+      - name: Bundle
+        run: bash tools/bundle-windows.sh build dist/aircast
+
+      - name: Smoke test the bundle
+        # No MSYS2 on PATH and a poisoned XDG_DATA_DIRS: this is the machine the
+        # user has, plus the one environment variable that silently breaks the
+        # bundle. Loading the plugins pulls in the whole DLL closure.
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          $env:XDG_DATA_DIRS = "C:\nope"
+          cd dist\aircast\bin
+          foreach ($e in 'gtk4paintablesink','vp8dec','webrtcbin','rtph264depay','h264parse','matroskamux','decodebin') {
+            .\gst-inspect-1.0.exe $e > $null
+            if ($LASTEXITCODE -ne 0) { throw "missing element: $e" }
+          }
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          # WiX v7 refuses to run until the Open Source Maintenance Fee EULA is
+          # accepted, and accepting it is documented as following payment. v5 is
+          # the last series without that gate, and it has the <Files> harvesting
+          # this installer is built on.
+          dotnet tool install --global wix --version 5.0.2
+          wix build installer/aircast.wxs -arch x64 -d Ver=$env:VERSION -d Stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
+          # wix build runs no ICEs of its own. ICE105 is the dual-purpose-package
+          # gate, and whether <Files> harvesting passes it is unsourced — so it
+          # is a CI step rather than an assumption.
+          wix msi validate -ice ICE105 "Aircast-Receiver-$env:VERSION-x64.msi"
+          # A harvest that finds nothing is a warning, not an error, and produces
+          # a 35 KB installer that installs a program which cannot start. The
+          # bundle is ~350 MB; anything under 100 MB means harvesting broke.
+          $msi = Get-Item "Aircast-Receiver-$env:VERSION-x64.msi"
+          "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
+          if ($msi.Length -lt 100MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aircast-receiver-msi
+          path: Aircast-Receiver-*-x64.msi

@@ -28,6 +28,12 @@
 #include <libsoup/soup.h>
 #include <string.h>
 
+#ifdef G_OS_WIN32
+#include <windows.h>
+#endif
+
+#include "update_check.h"
+
 #define TOOLBAR_HIDE_MS 2500
 
 typedef struct {
@@ -37,6 +43,10 @@ typedef struct {
   gchar *record_dir;
   guint latency_ms;
   gboolean no_relay;
+  gboolean insecure;
+  gboolean selftest;
+  gchar *verify_manifest;
+  gchar *verify_signature;
 
   /* signalling */
   SoupSession *session;
@@ -62,12 +72,62 @@ typedef struct {
   GtkWidget *revealer;
   GtkWidget *record_button;
   GtkWidget *record_time;
+  GtkWidget *update_label;      /* passive: last checked, highest version seen */
+  gchar *update_url;            /* built from verified integers, or NULL */
 
   guint hide_source;
   guint record_timer;
   gint64 record_started;
   gboolean recording;
 } App;
+
+/* Run before anything else in main(), and specifically before
+ * g_option_context_parse(), because gst_init() runs inside it and the registry
+ * scan is the largest LoadLibrary surface in the process.
+ *
+ * GLib's own guard against module-path variables is g_check_setuid(), which
+ * returns FALSE on Windows — so anything that can write HKCU\Environment gets
+ * arbitrary DLLs loaded into this process, with no admin and no writable
+ * install directory. No signature scheme anywhere else in this program touches
+ * that, which is why this is the first thing that happens. */
+static void
+harden_environment (void)
+{
+  g_unsetenv ("GIO_EXTRA_MODULES");
+  g_unsetenv ("GIO_USE_TLS");
+  g_unsetenv ("GST_PLUGIN_PATH");
+  g_unsetenv ("GST_PLUGIN_PATH_1_0");
+  g_unsetenv ("GST_PLUGIN_SYSTEM_PATH");
+  g_unsetenv ("GST_PLUGIN_SYSTEM_PATH_1_0");
+  g_unsetenv ("GST_REGISTRY");
+
+#ifdef G_OS_WIN32
+  /* The Windows build ships as a relocatable bundle: bin/ holds the exe and
+   * every DLL, and each layer finds its data by walking up from the DLL it was
+   * loaded from. XDG_DATA_DIRS defeats that — when it is set and non-empty,
+   * GLib never appends <root>/share, the bundled gschemas.compiled goes
+   * invisible, and g_settings_new() aborts. Anyone launching from Git Bash or
+   * an MSYS2 shell has it set. */
+  g_unsetenv ("XDG_DATA_DIRS");
+
+  gchar *root = g_win32_get_package_installation_directory_of_module (NULL);
+  if (root) {
+    gchar *schemas = g_build_filename (root, "share", "glib-2.0", "schemas", NULL);
+    g_setenv ("GSETTINGS_SCHEMA_DIR", schemas, TRUE);
+    g_free (schemas);
+    g_free (root);
+  }
+
+  /* Scope, stated honestly: this governs later LoadLibraryEx calls only. GTK,
+   * GStreamer, GLib, json-glib and libsoup are static imports resolved by the
+   * loader before main() runs, under the standard search order. DEFAULT_DIRS
+   * keeps the application directory — GStreamer's plugins live there — which is
+   * only sound because the installer puts us in %ProgramFiles%. That installer
+   * choice, not this call, is what makes the application directory safe. */
+  SetDefaultDllDirectories (LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+  SetDllDirectoryW (L"");
+#endif
+}
 
 static void on_pad_added (GstElement *webrtc, GstPad *pad, App *self);
 static void send_json (App *self, JsonBuilder *builder);
@@ -336,10 +396,19 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint code,
 static gchar *
 turn_uri (JsonObject *turn)
 {
+  /* A server that omits any of these is not trusted to crash us. */
+  if (!json_object_has_member (turn, "urls") ||
+      !json_object_has_member (turn, "username") ||
+      !json_object_has_member (turn, "credential"))
+    return NULL;
+
   JsonArray *urls = json_object_get_array_member (turn, "urls");
   const gchar *user = json_object_get_string_member (turn, "username");
   const gchar *pass = json_object_get_string_member (turn, "credential");
   gchar *uri = NULL;
+
+  if (!urls || !user || !pass)
+    return NULL;
 
   for (guint i = 0; i < json_array_get_length (urls) && !uri; i++) {
     const gchar *url = json_array_get_string_element (urls, i);
@@ -490,7 +559,7 @@ on_offer (App *self, const gchar *sdp_text)
 {
   GstSDPMessage *sdp = NULL;
 
-  if (gst_sdp_message_new_from_text (sdp_text, &sdp) != GST_SDP_OK) {
+  if (!sdp_text || gst_sdp_message_new_from_text (sdp_text, &sdp) != GST_SDP_OK) {
     set_status (self, "The sender's offer is not valid SDP");
     return;
   }
@@ -537,7 +606,11 @@ on_message (SoupWebsocketConnection *ws, gint type, GBytes *bytes, App *self)
     show_page (self, "idle");
     set_status (self, "The phone stopped casting");
   } else if (g_str_equal (kind, "error")) {
-    set_status (self, json_object_get_string_member_with_default (msg, "message", "Signalling error"));
+    /* Never render the server's own words: this label also carries the update
+     * notice, and an attacker-controlled string in it is a phishing primitive. */
+    g_message ("signalling error: %s",
+        json_object_get_string_member_with_default (msg, "message", "(no detail)"));
+    set_status (self, "Signalling error");
   }
 
   g_object_unref (parser);
@@ -692,6 +765,60 @@ toolbar_button (const gchar *icon, const gchar *tooltip)
   return button;
 }
 
+/* ------------------------------------------------------------------ update */
+
+/* Nothing here downloads or runs anything. The verified manifest yields three
+ * integers; those build a GitHub tag URL, and the browser does the rest — where
+ * Mark of the Web and SmartScreen still apply to whatever the user chooses to
+ * run. docs/threat-model.md says what that does and does not buy. */
+static void
+on_update_checked (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  App *self = user_data;
+  AircastUpdate *update = aircast_update_check_finish (result);
+
+  g_clear_pointer (&self->update_url, g_free);
+  if (update->available && update->tag_url) {
+    self->update_url = g_strdup (update->tag_url);
+    /* Built with printf from validated integers and hex, never set_markup, and
+     * never a sentence the feed wrote: this label is the one place a user
+     * decides whether to go and install something. */
+    gchar *text = g_strdup_printf ("%s — click Update.\nFile: %s\nSHA-256: %s",
+        update->status, update->asset, update->sha256);
+    gtk_label_set_text (GTK_LABEL (self->update_label), text);
+    g_free (text);
+  } else {
+    gint64 now = g_get_real_time () / G_USEC_PER_SEC;
+    gint64 days = update->last_success ? (now - update->last_success) / 86400 : -1;
+
+    if (update->configured && days > 30) {
+      /* A check that never succeeds again is how a freeze looks from inside the
+       * app, and silence is what makes it work. */
+      gchar *text = g_strdup_printf (
+          "%s — no successful check in %" G_GINT64_FORMAT " days; "
+          "see github.com/napejoon/aircast_ws/releases", update->status, days);
+      gtk_label_set_text (GTK_LABEL (self->update_label), text);
+      g_free (text);
+    } else {
+      gtk_label_set_text (GTK_LABEL (self->update_label), update->status);
+    }
+  }
+  aircast_update_free (update);
+}
+
+static void
+on_update_clicked (GtkButton *button, App *self)
+{
+  if (self->update_url) {
+    GtkUriLauncher *launcher = gtk_uri_launcher_new (self->update_url);
+    gtk_uri_launcher_launch (launcher, GTK_WINDOW (self->window), NULL, NULL, NULL);
+    g_object_unref (launcher);
+    return;
+  }
+  gtk_label_set_text (GTK_LABEL (self->update_label), "Checking for updates…");
+  aircast_update_check_async (AIRCAST_VERSION, TRUE, on_update_checked, self);
+}
+
 static GtkWidget *
 build_idle_page (App *self)
 {
@@ -719,7 +846,15 @@ build_idle_page (App *self)
   gtk_box_append (GTK_BOX (box), title);
   gtk_box_append (GTK_BOX (box), hint);
   gtk_box_append (GTK_BOX (box), self->code_label);
+  self->update_label = gtk_label_new ("");
+  gtk_widget_add_css_class (self->update_label, "status");
+  gtk_label_set_wrap (GTK_LABEL (self->update_label), TRUE);
+  gtk_label_set_max_width_chars (GTK_LABEL (self->update_label), 48);
+  gtk_label_set_justify (GTK_LABEL (self->update_label), GTK_JUSTIFY_CENTER);
+  gtk_label_set_selectable (GTK_LABEL (self->update_label), TRUE);
+
   gtk_box_append (GTK_BOX (box), self->status_label);
+  gtk_box_append (GTK_BOX (box), self->update_label);
   return box;
 }
 
@@ -765,8 +900,14 @@ build_toolbar (App *self)
   GtkWidget *quit = toolbar_button ("window-close-symbolic", "Disconnect");
   g_signal_connect (quit, "clicked", G_CALLBACK (on_disconnect_clicked), self);
 
+  GtkWidget *update = gtk_button_new_with_label ("Update");
+  gtk_widget_set_tooltip_text (update, "Check for a new version");
+  gtk_widget_add_css_class (update, "tool");
+  g_signal_connect (update, "clicked", G_CALLBACK (on_update_clicked), self);
+
   gtk_box_append (GTK_BOX (bar), self->record_button);
   gtk_box_append (GTK_BOX (bar), self->record_time);
+  gtk_box_append (GTK_BOX (bar), update);
   gtk_box_append (GTK_BOX (bar), fullscreen);
   gtk_box_append (GTK_BOX (bar), quit);
   return bar;
@@ -826,6 +967,10 @@ activate (GtkApplication *app, gpointer user_data)
 
   gtk_window_present (GTK_WINDOW (self->window));
 
+  /* Throttled to one attempt per day and keyed on attempts, so neither a
+   * hostile network nor a restart loop can spin it. */
+  aircast_update_check_async (AIRCAST_VERSION, FALSE, on_update_checked, self);
+
   self->session = soup_session_new ();
   self->message = soup_message_new (SOUP_METHOD_GET, self->signal_url);
   soup_session_websocket_connect_async (self->session, self->message, NULL, NULL,
@@ -857,6 +1002,11 @@ int
 main (int argc, char *argv[])
 {
   App self = { .latency_ms = 200 };
+
+  /* First statement in main(): before gst_init() runs inside the option parse,
+   * and before anything can cache a data directory. */
+  harden_environment ();
+
   GOptionEntry entries[] = {
     { "signal", 's', 0, G_OPTION_ARG_STRING, &self.signal_url,
         "Signalling server URL, e.g. wss://signal.example.com/ws", "URL" },
@@ -866,6 +1016,14 @@ main (int argc, char *argv[])
         "Where the record button writes .mkv files (default: home)", "DIR" },
     { "latency", 'l', 0, G_OPTION_ARG_INT, &self.latency_ms,
         "Jitter buffer in ms (default 200, the first knob to tune)", "MS" },
+    { "insecure", 0, 0, G_OPTION_ARG_NONE, &self.insecure,
+        "Allow a plaintext ws:// signalling URL. LAN bring-up only", NULL },
+    { "selftest", 0, 0, G_OPTION_ARG_NONE, &self.selftest,
+        "Run the version and signature self-tests and exit", NULL },
+    { "verify-manifest", 0, 0, G_OPTION_ARG_FILENAME, &self.verify_manifest,
+        "Verify an update manifest against this build's key and exit", "FILE" },
+    { "verify-signature", 0, 0, G_OPTION_ARG_FILENAME, &self.verify_signature,
+        "The .minisig for --verify-manifest", "FILE" },
     { "no-relay", 0, 0, G_OPTION_ARG_NONE, &self.no_relay,
         "Allow direct ICE. LAN testing only — both peers learn each other's address", NULL },
     { NULL },
@@ -881,8 +1039,27 @@ main (int argc, char *argv[])
   }
   g_option_context_free (ctx);
 
+  /* Both exits happen before any window, so CI runs them headless. */
+  if (self.selftest)
+    return aircast_update_selftest ();
+  if (self.verify_manifest || self.verify_signature) {
+    if (!self.verify_manifest || !self.verify_signature) {
+      g_printerr ("--verify-manifest and --verify-signature go together\n");
+      return 1;
+    }
+    return aircast_update_selftest_manifest (self.verify_manifest, self.verify_signature);
+  }
+
   if (!self.signal_url) {
     g_printerr ("--signal is required\n");
+    return 1;
+  }
+
+  /* wss:// only. A plaintext signalling channel hands the pairing code and both
+   * SDPs to anyone on the path, and what follows them is a screen. */
+  if (!g_str_has_prefix (self.signal_url, "wss://") && !self.insecure) {
+    g_printerr ("--signal must be wss://; pass --insecure to allow ws:// on a "
+        "LAN you control\n");
     return 1;
   }
   if (!self.code) {

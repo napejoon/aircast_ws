@@ -25,6 +25,8 @@ no third-party media service in the path.
 | `ops/` | systemd unit, coturn and nginx templates. |
 | `docs/research/` | Why each of those is what it is. Primary sources only. |
 | `docs/protocol/` | The signalling wire protocol. |
+| `docs/threat-model.md` | What the update channel defends against, and what it does not. |
+| `installer/` | The Windows MSI definition. |
 | `tools/` | A fake sender, so the receiver can be tested without a phone. |
 
 ## The decisions that shape everything else
@@ -39,6 +41,10 @@ no third-party media service in the path.
   raw H.264 stream on a socket.
 - **Recording happens at the receiver, off a `tee`**, so what lands on disk is
   the sender's own bitstream.
+- **The update check never downloads or runs anything.** It verifies a manifest
+  signed by an offline key and then hands a URL to the browser, where Mark of
+  the Web and SmartScreen still apply. `docs/threat-model.md` says why, and what
+  that leaves exposed.
 
 ## Quickstart
 
@@ -67,7 +73,7 @@ so when it is on:
 # the signalling server has to be reachable from the phone, not just loopback
 AIRCAST_BIND=0.0.0.0 AIRCAST_TURN_SECRET=dev AIRCAST_TURN_URLS=turn:127.0.0.1:3478 python server/aircast_signal.py
 
-./receiver/build/aircast-receiver --signal ws://<desktop-lan-ip>:8443 --no-relay
+./receiver/build/aircast-receiver --signal ws://<desktop-lan-ip>:8443 --no-relay --insecure
 
 flutter run --dart-define=AIRCAST_SIGNAL=ws://<desktop-lan-ip>:8443 --dart-define=AIRCAST_RELAY=false
 ```

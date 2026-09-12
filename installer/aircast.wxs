@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The whole Windows installer.
+
+    wix build installer/aircast.wxs -arch x64 -d Ver=$V -d Stage=dist/aircast \
+      -o Aircast-Receiver-$V-x64.msi
+    wix msi validate -ice ICE105 Aircast-Receiver-$V-x64.msi
+
+  MSI rather than an NSIS .exe for one reason: <MajorUpgrade/> removes the
+  previous version's exact file set. This bundle is several hundred GStreamer
+  plugin DLLs, and a stale plugin left behind by a partial upgrade is a crash,
+  not a leak.
+
+  Per-machine, into %ProgramFiles%, which costs a UAC prompt at install time and
+  buys the thing that actually matters: the application directory is not
+  writable by the user. GStreamer loads its plugins from beside the exe, and
+  Windows searches the application directory first — a per-user install into
+  %LocalAppData% would let any code running as that user drop a DLL there and
+  be loaded by us. docs/threat-model.md, T5.
+
+  Harvesting takes a preprocessor variable, not a bind path: -b bindpaths are
+  resolved when files are bound, which is after harvesting has already decided
+  what exists, so Files/@Include silently found nothing and produced a 35 KB
+  installer of one executable.
+
+  UpgradeCode is generated once and committed forever. Changing it gives a user
+  two side-by-side installations fighting over the plugin scan.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Aircast Receiver"
+           Manufacturer="napejoon"
+           Version="$(var.Ver)"
+           UpgradeCode="027C7C65-2D1E-488A-A147-552B9D981628"
+           Scope="perMachine">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="Aircast Receiver">
+        <Component>
+          <File Id="AircastExe" Source="$(var.Stage)\bin\aircast-receiver.exe" />
+          <Shortcut Directory="ShortcutFolder" Name="Aircast Receiver"
+                    Target="[#AircastExe]" WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="CleanShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
+        </Component>
+
+        <!-- The Exclude is load-bearing: without it the exe is harvested twice
+             and the build fails. -->
+        <Files Include="$(var.Stage)\**">
+          <Exclude Files="$(var.Stage)\bin\aircast-receiver.exe" />
+        </Files>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ShortcutFolder" Name="Aircast" />
+    </StandardDirectory>
+  </Package>
+</Wix>
