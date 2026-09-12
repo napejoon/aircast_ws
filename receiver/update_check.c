@@ -481,12 +481,25 @@ aircast_update_selftest (void)
   g_assert (manifest_verify_with_key (tampered, mlen, sig, slen, pk) != 0);
   g_free (tampered);
 
-  /* One flipped signature byte. */
+  /* One flipped signature byte. The offset matters: base64 characters 0..13
+   * cover the "ED" tag and the key id, and the key id is deliberately never
+   * read, so a flip there legitimately still verifies. Character 30 is inside
+   * the 64 signature bytes. */
   gchar *bad_sig = g_strdup (sig);
   gchar *second_line = strchr (bad_sig, '\n') + 1;
-  second_line[5] = second_line[5] == 'A' ? 'B' : 'A';
+  g_assert (strlen (second_line) > 40);
+  second_line[30] = second_line[30] == 'A' ? 'B' : 'A';
   g_assert (manifest_verify_with_key (manifest, mlen, bad_sig, strlen (bad_sig), pk) != 0);
   g_free (bad_sig);
+
+  /* And the property that flip exposed, asserted on purpose: the key id is not
+   * part of what is verified. If this ever starts failing, someone has started
+   * trusting a field the signature does not cover. */
+  gchar *other_id = g_strdup (sig);
+  gchar *id_line = strchr (other_id, '\n') + 1;
+  id_line[5] = id_line[5] == 'A' ? 'B' : 'A';
+  g_assert (manifest_verify_with_key (manifest, mlen, other_id, strlen (other_id), pk) == 0);
+  g_free (other_id);
 
   /* Truncated. */
   g_assert (manifest_verify_with_key (manifest, mlen, sig, 20, pk) != 0);
