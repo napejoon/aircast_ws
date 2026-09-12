@@ -94,3 +94,40 @@ jobs:
       - name: Build
         working-directory: sender
         run: flutter build apk --debug
+
+  paintablesink:
+    name: gtk4paintablesink (the plugin apt does not ship)
+    runs-on: ubuntu-24.04
+    env:
+      # 0.13 is the series built against GStreamer 1.24, which is what Ubuntu
+      # 24.04 ships. Raising this without raising the runner's GStreamer is how
+      # you get a plugin that refuses to load.
+      PLUGINS_RS_TAG: "0.13.7"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-tools
+      # A long build whose inputs never move: a pinned tag and a pinned image.
+      # Uncached, this job would dominate every run.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            gst-plugins-rs/target
+          key: paintablesink-${{ runner.os }}-${{ env.PLUGINS_RS_TAG }}
+      - name: Build
+        run: |
+          command -v cargo-cbuild >/dev/null || cargo install cargo-c --locked
+          test -d gst-plugins-rs || git clone --depth 1 --branch "$PLUGINS_RS_TAG" https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git
+          cd gst-plugins-rs
+          cargo cbuild -p gst-plugin-gtk4 --release
+          sudo -E $(command -v cargo) cinstall -p gst-plugin-gtk4 --release --prefix=/usr/local
+      - name: Register
+        # The question this job exists to answer: having built it, does
+        # GStreamer actually find and load it?
+        run: |
+          export GST_PLUGIN_PATH=/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0:/usr/local/lib/gstreamer-1.0
+          gst-inspect-1.0 gtk4paintablesink

@@ -52,6 +52,12 @@ GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 gst-inspect-1.0 gtk4paintablesink
 If the plugin is missing at runtime the window says so instead of showing a
 black rectangle.
 
+CI builds it the same way (`.github/workflows/ci.yml`, job `paintablesink`) and
+checks that `gst-inspect-1.0` finds it afterwards, so these commands are tested
+rather than remembered. The tag is pinned there for the same reason it should be
+here: 0.13 is the series built against the GStreamer 1.24 that Ubuntu 24.04
+ships.
+
 Windows: the first-party GStreamer MSVC **development** installer, GTK4 from
 `gvsbuild` or MSYS2, and `gtk4paintablesink` built the same way as above.
 Configure with `PKG_CONFIG_PATH` pointing at both `lib/pkgconfig` directories.
