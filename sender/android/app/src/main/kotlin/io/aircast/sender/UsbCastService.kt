@@ -52,6 +52,14 @@ class UsbCastService : Service() {
             }
 
             ACTION_START -> start(intent)
+
+            // Nothing but the notification, for the WebRTC path. flutter_webrtc
+            // calls getMediaProjection() itself and starts no service of its
+            // own, and since targetSdk 29 the platform answers that with a
+            // SecurityException thrown on the main thread from native code —
+            // which kills the process before any Dart catch can see it. This
+            // action exists so that call has somewhere to stand.
+            ACTION_HOLD -> startForegroundWithNotification("Casting this screen")
         }
         return START_NOT_STICKY
     }
@@ -167,14 +175,14 @@ class UsbCastService : Service() {
         }
     }
 
-    private fun startForegroundWithNotification() {
+    private fun startForegroundWithNotification(text: String = "Casting this screen over USB") {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Screen cast", NotificationManager.IMPORTANCE_LOW)
         )
         val notification: Notification = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("aircast")
-            .setContentText("Casting this screen over USB")
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setOngoing(true)
             .build()
@@ -217,6 +225,7 @@ class UsbCastService : Service() {
     companion object {
         const val ACTION_START = "io.aircast.sender.USB_START"
         const val ACTION_STOP = "io.aircast.sender.USB_STOP"
+        const val ACTION_HOLD = "io.aircast.sender.HOLD_FOREGROUND"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
         const val EXTRA_SOCKET_NAME = "socketName"

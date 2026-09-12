@@ -52,6 +52,23 @@ class UsbCastPlugin(
                 activity.startActivityForResult(intent, REQUEST_CONSENT)
             }
 
+            // The WebRTC path's half of the same rule. flutter_webrtc takes
+            // consent itself and then calls getMediaProjection() with no
+            // foreground service running, which is a SecurityException thrown
+            // on the main thread from native code — the process dies before
+            // Dart hears about it. Dart calls this between the two, so the
+            // service is already up when the plugin's own call lands.
+            //
+            // startForegroundService, not startService: the app is in the
+            // foreground when this runs, but the five-second window it opens is
+            // what makes the ordering guarantee rather than a race.
+            "holdForeground" -> {
+                activity.startForegroundService(
+                    Intent(activity, UsbCastService::class.java).setAction(UsbCastService.ACTION_HOLD)
+                )
+                result.success(null)
+            }
+
             "stop" -> {
                 activity.startService(
                     Intent(activity, UsbCastService::class.java).setAction(UsbCastService.ACTION_STOP)
