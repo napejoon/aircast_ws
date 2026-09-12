@@ -77,7 +77,8 @@ jobs:
           # v5 is the last series before WiX gated every command behind the
           # Open Source Maintenance Fee EULA. See ci.yml.
           dotnet tool install --global wix --version 5.0.2
-          wix build installer/aircast.wxs -arch x64 -d Ver=$env:VERSION -d Stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
           wix msi validate -ice ICE105 "Aircast-Receiver-$env:VERSION-x64.msi"
           # A harvest that finds nothing is a warning, not an error, and produces
           # a 35 KB installer that installs a program which cannot start. The
