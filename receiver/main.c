@@ -1039,8 +1039,27 @@ main (int argc, char *argv[])
   }
   g_option_context_free (ctx);
 
+  /* Both exits happen before any window, so CI runs them headless. */
+  if (self.selftest)
+    return aircast_update_selftest ();
+  if (self.verify_manifest || self.verify_signature) {
+    if (!self.verify_manifest || !self.verify_signature) {
+      g_printerr ("--verify-manifest and --verify-signature go together\n");
+      return 1;
+    }
+    return aircast_update_selftest_manifest (self.verify_manifest, self.verify_signature);
+  }
+
   if (!self.signal_url) {
     g_printerr ("--signal is required\n");
+    return 1;
+  }
+
+  /* wss:// only. A plaintext signalling channel hands the pairing code and both
+   * SDPs to anyone on the path, and what follows them is a screen. */
+  if (!g_str_has_prefix (self.signal_url, "wss://") && !self.insecure) {
+    g_printerr ("--signal must be wss://; pass --insecure to allow ws:// on a "
+        "LAN you control\n");
     return 1;
   }
   if (!self.code) {
