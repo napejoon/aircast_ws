@@ -100,6 +100,24 @@ survivable only because the key's authority stops at "show a notice": a lost key
 means notices stop, a stolen key buys a false notice pointing at a GitHub tag the
 thief does not control.
 
+**The sender's APK is signed by a second, unrelated key**, an Android keystore
+made once on the same offline machine:
+
+```
+keytool -genkeypair -v -keystore aircast-sender.jks -alias aircast \
+  -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Losing this one costs more than losing the minisign key. That key's authority
+stops at "show a notice"; this key *is* the app's identity. Android will only
+accept an update signed by the same key, so a lost keystore means every phone
+that has aircast must uninstall it by hand before it can take another release —
+and a stolen keystore lets the thief replace aircast on any of those phones,
+with no notice and no dialog. Same storage rule as the minisign key, for a
+bigger reason: the offline machine and two encrypted backups, never an Actions
+secret. `-validity 10000` because an expired signing key cannot be rotated
+either.
+
 ## Release ceremony
 
 On the maintainer's machine, about five minutes. The steps that are easy to skip
@@ -108,12 +126,13 @@ and expensive to skip are 1, 4, 5 and 10.
 1. **Note the commit SHA from your own clone** of the tag you are about to push.
    *Skipped:* nothing binds the artifact to source you actually read.
 2. **Push the tag.** CI builds, attests, drafts, and runs `--selftest`.
-3. **Download the draft's MSI** (`gh release download vX.Y.Z -p '*.msi'`).
+3. **Download the draft's assets** (`gh release download vX.Y.Z`) — the MSI and
+   the unsigned APK.
    *Skipped:* you end up signing a digest CI handed you, which gives a
    compromised Actions token your offline key's authority over its own build.
 4. **Gate on the attestation, with the ref pinned:**
    ```
-   gh attestation verify <msi> -R napejoon/aircast_ws \
+   gh attestation verify <file> -R napejoon/aircast_ws \
      --cert-identity 'https://github.com/napejoon/aircast_ws/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
      --cert-oidc-issuer https://token.actions.githubusercontent.com \
      --source-digest <SHA from step 1> --deny-self-hosted-runners
@@ -121,7 +140,11 @@ and expensive to skip are 1, 4, 5 and 10.
    *Skipped, or run with `--signer-workflow` instead:* that flag matches the
    workflow path only, so an attacker pushes a branch, edits `release.yml`
    there, runs it, and the identity becomes `…@refs/heads/evil` — which passes.
-   The pinned `--cert-identity` is the whole check.
+   The pinned `--cert-identity` is the whole check. Run it once per file: the
+   MSI and the APK are separate subjects of the same attestation. For the APK
+   this is the only moment provenance is checkable at all — apksigner in step 9
+   changes the file's digest, so the attestation stops matching and can never be
+   re-run. *Skipped for the APK:* you sign whatever the draft happened to hold.
 5. **Hash it yourself:** `certutil -hashfile <msi> SHA256`.
 6. **Write `aircast-update.json` by hand.** Five fields:
    ```json
@@ -138,11 +161,31 @@ and expensive to skip are 1, 4, 5 and 10.
    `aircast-receiver --verify-manifest aircast-update.json --verify-signature aircast-update.json.minisig`
    — exit 0 required. *Skipped:* you ship a release every installed copy
    silently refuses, which is indistinguishable from a freeze attack.
-9. **Upload both to the draft, then publish** (`gh release edit vX.Y.Z --draft=false`).
+9. **Sign the APK, then upload everything and publish.** zipalign first,
+   apksigner second, and nothing touches the zip afterwards — apksigner's
+   signature covers the file layout, so aligning a signed APK invalidates it:
+   ```
+   zipalign -P 16 -f 4 Aircast-Sender-X.Y.Z-unsigned.apk Aircast-Sender-X.Y.Z.apk
+   apksigner sign --ks aircast-sender.jks --ks-key-alias aircast Aircast-Sender-X.Y.Z.apk
+   apksigner verify --print-certs --verbose Aircast-Sender-X.Y.Z.apk
+   ```
+   `-P 16` is for the 16 KB-page devices; the APK carries uncompressed `.so`
+   files from libwebrtc and the Flutter engine. Pass no `--v1/--v2/--v3` and no
+   `--min-sdk-version`: apksigner reads `minSdk` out of the APK and picks the
+   schemes from it, which at 26 is v2 and v3 — pass one by hand and you are
+   overriding the manifest with a guess. The verify must print `v2 …: true` and
+   a certificate fingerprint you recognise.
+   Then upload `aircast-update.json`, its `.minisig` and the signed APK, remove
+   the unsigned one (`gh release delete-asset vX.Y.Z Aircast-Sender-X.Y.Z-unsigned.apk`)
+   so nobody downloads a file that cannot install, and publish
+   (`gh release edit vX.Y.Z --draft=false`).
    Publishing is what makes the assets immutable; the draft window is mutable by
    design, so keep it short.
-10. **Re-download the published MSI and re-hash it.** If it differs from what you
-    signed, delete the release. *Skipped:* an asset swapped during the draft
+10. **Re-download the published assets and re-hash both.**
+    `certutil -hashfile <msi> SHA256`, and the same for the APK, against the
+    local copies you signed. If either differs, delete the release. `apksigner
+    verify` is not the check here: it proves the file is signed by some key, not
+    that it is the file you uploaded. *Skipped:* an asset swapped during the draft
     window ships with a manifest that authentically vouches for a hash nobody
     will ever compare it to — no code checks it, so this manual step is the only
     thing that catches it.
