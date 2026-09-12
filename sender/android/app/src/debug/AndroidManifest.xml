@@ -5,8 +5,8 @@
          refuses cleartext outright — the socket fails before any of our code
          runs, which looks exactly like "the tablet cannot reach the laptop".
 
-         This file is never part of a release build. The release manifest has no
-         cleartext permission, and main.dart's default is wss://; the receiver
-         makes the same distinction with --insecure. -->
+         This file is never part of a release build. The release manifest has
+         no cleartext permission, main.dart's default is wss://, and the
+         receiver demands wss:// unless its insecure flag says otherwise. -->
     <application android:usesCleartextTraffic="true" />
 </manifest>
