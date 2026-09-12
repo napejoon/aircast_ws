@@ -1,0 +1,43 @@
+[Unit]
+Description=aircast signalling server
+Documentation=https://github.com/napejoon/aircast_ws/issues/5
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aircast
+Group=aircast
+ExecStart=/usr/local/bin/aircast-signal
+# Shared secret comes from here so it never appears in the unit or in `ps`.
+# Create with: install -o root -g aircast -m 640 /dev/null /etc/aircast/signal.env
+EnvironmentFile=/etc/aircast/signal.env
+Restart=on-failure
+RestartSec=2
+
+# Hardening — this process needs a listening socket and nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# systemd.exec(5): "in most cases, the local AF_UNIX address family should be
+# included in the configured allow list as it is frequently used for local
+# communication, including for syslog(2) logging."
+# If glibc DNS resolution fails at first start, add AF_NETLINK — getaddrinfo
+# uses NETLINK_ROUTE to enumerate local source addresses. Add on evidence.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# Only needed if the binary terminates TLS itself and binds a port below 1024.
+# Prefer a high port behind nginx/caddy and delete these two lines.
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
+#CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
