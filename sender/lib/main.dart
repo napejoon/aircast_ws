@@ -112,8 +112,8 @@ class _SenderPageState extends State<SenderPage> {
       // Into logcat as well as onto the screen: a status line the user does not
       // read is a failure nobody can diagnose, and three of these were found by
       // adb, not by eye.
-      debugPrint('aircast: session failed: $e
-$st');
+      debugPrint('aircast: session failed: $e');
+      debugPrint('$st');
       await _stop(status: '$e');
     }
   }
