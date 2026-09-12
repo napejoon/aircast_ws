@@ -182,8 +182,10 @@ jobs:
         # The tag is the only source of truth. A non-tag build stamps 0.0.0, so
         # every real release compares newer than anything CI produced by hand.
         run: |
-          V="${GITHUB_REF_NAME#v}"
-          case "$GITHUB_REF_NAME" in v*) ;; *) V="0.0.0" ;; esac
+          # On the ref TYPE, not on the name: a branch called v2-something is
+          # not a release, and matching the name stamped its suffix as a version.
+          V=0.0.0
+          if [ "$GITHUB_REF_TYPE" = tag ]; then V="${GITHUB_REF_NAME#v}"; fi
           echo "VERSION=$V" >> "$GITHUB_ENV"
 
       - name: Build
