@@ -27,7 +27,6 @@ sender/android/gradle/
 sender/android/*.gradle.kts
 sender/android/app/*.gradle.kts
 sender/android/app/src/main/res/
-sender/android/app/src/debug/
 sender/android/app/src/profile/
 sender/ios/Runner/
 sender/ios/Runner.xcodeproj/

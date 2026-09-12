@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Debug builds only, and for exactly one reason: a bring-up talks to a
+         signalling server on the LAN over ws://, and since targetSdk 28 Android
+         refuses cleartext outright — the socket fails before any of our code
+         runs, which looks exactly like "the tablet cannot reach the laptop".
+
+         This file is never part of a release build. The release manifest has no
+         cleartext permission, and main.dart's default is wss://; the receiver
+         makes the same distinction with --insecure. -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>
