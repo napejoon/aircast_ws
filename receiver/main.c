@@ -783,8 +783,7 @@ on_update_checked (GObject *source, GAsyncResult *result, gpointer user_data)
     /* Built with printf from validated integers and hex, never set_markup, and
      * never a sentence the feed wrote: this label is the one place a user
      * decides whether to go and install something. */
-    gchar *text = g_strdup_printf ("%s — click Update. File: %s
-SHA-256: %s",
+    gchar *text = g_strdup_printf ("%s — click Update.\nFile: %s\nSHA-256: %s",
         update->status, update->asset, update->sha256);
     gtk_label_set_text (GTK_LABEL (self->update_label), text);
     g_free (text);

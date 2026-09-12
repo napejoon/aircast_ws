@@ -130,7 +130,7 @@ jobs:
           path: |
             ~/.cargo/bin
             ~/.cargo/registry
-            gst-plugins-rs/target
+            ~/plugins-rs-target
           key: paintablesink-${{ runner.os }}-${{ env.PLUGINS_RS_TAG }}
       - name: Build
         run: |
@@ -138,8 +138,13 @@ jobs:
           # cache entry is an unreviewed binary, and this is the job that builds
           # a plugin the receiver loads.
           cargo install cargo-c --locked --force
-          test -d gst-plugins-rs || git clone --depth 1 --branch "$PLUGINS_RS_TAG" https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git
+          # Always a fresh clone: the cache used to restore gst-plugins-rs/target,
+          # which made the directory exist, which skipped the clone, which left
+          # cargo with no Cargo.toml. The build cache lives outside the tree now.
+          rm -rf gst-plugins-rs
+          git clone --depth 1 --branch "$PLUGINS_RS_TAG" https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git
           cd gst-plugins-rs
+          export CARGO_TARGET_DIR="$HOME/plugins-rs-target"
           cargo cbuild -p gst-plugin-gtk4 --release
           sudo -E $(command -v cargo) cinstall -p gst-plugin-gtk4 --release --prefix=/usr/local
       - name: Register
