@@ -18,26 +18,38 @@
   %LocalAppData% would let any code running as that user drop a DLL there and
   be loaded by us. docs/threat-model.md, T5.
 
-  Harvesting takes a preprocessor variable, not a bind path: -b bindpaths are
-  resolved when files are bound, which is after harvesting has already decided
-  what exists, so Files/@Include silently found nothing and produced a 35 KB
-  installer of one executable.
+  Stage is made absolute here rather than required absolute from the caller,
+  because a relative Files/@Include is not resolved against the working
+  directory: it is appended to the source path of the Directory it sits in, so
+  -d Stage=dist/aircast was searched for under "Aircast Receiver\dist\aircast",
+  found nothing, and shipped a 65 KB installer holding one executable. A harvest
+  root that does not exist is warning WIX8601, not an error. Swapping -b for -d
+  changed nothing — both values were relative. The MSI size floor in CI is what
+  now catches an empty harvest.
 
-  The exe is declared explicitly, and inside bin/, because a Shortcut needs a
-  File to point at — and Source only says where the bits come from: the install
-  target is the parent Directory. Declared straight under INSTALLFOLDER it
-  installed to the install root while the harvest recreated the staged tree and
-  put all 500-odd DLLs in bin/, so the installed program died before main():
-  those DLLs are static imports, and the loader resolves them from the
-  application directory. main.c also derives <root>/share/glib-2.0/schemas by
-  walking up out of bin, which only works from bin. CI now extracts the built
-  package and checks that layout — the smoke test only ever looked at the
-  staged tree, which was always right.
+  The exe is declared explicitly, and inside bin/, for two different reasons.
+  Explicitly, because the Shortcut needs a File to point at and harvested files
+  get generated ids nothing can reference; the Exclude then stops the harvest
+  installing a second copy of it. Inside bin/, because Source only says where
+  the bits come from: the install target is the parent Directory. Declared
+  straight under INSTALLFOLDER it installed to the install root while the
+  harvest recreated the staged tree and put all 500-odd DLLs in bin/, so the
+  installed program died before main(): those DLLs are static imports, and the
+  loader resolves them from the application directory. main.c also derives
+  <root>/share/glib-2.0/schemas by walking up out of bin, which only works from
+  bin. CI now extracts the built package and checks that layout — the smoke test
+  only ever looked at the staged tree, which was always right.
+
+  BinFolder and the bin the harvest generates for itself are two Directory rows
+  resolving to one folder. That is cosmetic; it buys a name WorkingDirectory and
+  a future RemoveFolder can refer to, which an inline subdirectory would not.
 
   UpgradeCode is generated once and committed forever. Changing it gives a user
   two side-by-side installations fighting over the plugin scan.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?define StageRoot=$(sys.CURRENTDIR)$(var.Stage)?>
+
   <Package Name="Aircast Receiver"
            Manufacturer="napejoon"
            Version="$(var.Ver)"
@@ -51,17 +63,18 @@
       <Directory Id="INSTALLFOLDER" Name="Aircast Receiver">
         <Directory Id="BinFolder" Name="bin">
           <Component>
-            <File Id="AircastExe" Source="$(var.Stage)\bin\aircast-receiver.exe" />
+            <File Id="AircastExe" Source="$(var.StageRoot)\bin\aircast-receiver.exe" />
             <Shortcut Directory="ShortcutFolder" Name="Aircast Receiver"
                       Target="[#AircastExe]" WorkingDirectory="BinFolder" />
             <RemoveFolder Id="CleanShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
           </Component>
         </Directory>
 
-        <!-- The Exclude is load-bearing: without it the exe is harvested twice
-             and the build fails. -->
-        <Files Include="$(var.Stage)\**">
-          <Exclude Files="$(var.Stage)\bin\aircast-receiver.exe" />
+        <!-- The Exclude is load-bearing: without it the harvest installs its own
+             copy of the exe into the same directory, and two components owning
+             one target file is an ICE30 error, not a duplicate-file warning. -->
+        <Files Include="$(var.StageRoot)\**">
+          <Exclude Files="$(var.StageRoot)\bin\aircast-receiver.exe" />
         </Files>
       </Directory>
     </StandardDirectory>
