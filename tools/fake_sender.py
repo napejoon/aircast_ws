@@ -11,7 +11,8 @@ visible at a glance.
 
 By default it lets aiortc use whatever ICE it can find, which is direct
 host-to-host on one machine. Pass --relay to honour the TURN credentials the
-server mints, which is what the real sender always does.
+server mints, which is what the real sender always does — the receiver then
+needs its TURN server reachable, and must not be run with --no-relay.
 """
 
 from __future__ import annotations

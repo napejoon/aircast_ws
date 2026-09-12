@@ -36,6 +36,7 @@ typedef struct {
   gchar *code;
   gchar *record_dir;
   guint latency_ms;
+  gboolean no_relay;
 
   /* signalling */
   SoupSession *session;
@@ -401,7 +402,7 @@ static gboolean
 build_pipeline (App *self, JsonObject *turn)
 {
   gchar *uri = turn_uri (turn);
-  if (!uri) {
+  if (!uri && !self->no_relay) {
     set_status (self, "The server sent no usable TURN URL");
     return FALSE;
   }
@@ -416,11 +417,15 @@ build_pipeline (App *self, JsonObject *turn)
 
   g_object_set (self->webrtc,
       "bundle-policy", GST_WEBRTC_BUNDLE_POLICY_MAX_BUNDLE,
-      "turn-server", uri,
-      /* Relay-only, matching the sender: the phone never learns our address. */
-      "ice-transport-policy", GST_WEBRTC_ICE_TRANSPORT_POLICY_RELAY,
+      /* Relay-only, matching the sender: the phone never learns our address.
+       * --no-relay drops that for LAN bring-up, and says so out loud. */
+      "ice-transport-policy", self->no_relay
+          ? GST_WEBRTC_ICE_TRANSPORT_POLICY_ALL
+          : GST_WEBRTC_ICE_TRANSPORT_POLICY_RELAY,
       "latency", self->latency_ms,
       NULL);
+  if (uri)
+    g_object_set (self->webrtc, "turn-server", uri, NULL);
   g_free (uri);
 
   gst_bin_add (GST_BIN (self->pipeline), self->webrtc);
@@ -861,6 +866,8 @@ main (int argc, char *argv[])
         "Where the record button writes .mkv files (default: home)", "DIR" },
     { "latency", 'l', 0, G_OPTION_ARG_INT, &self.latency_ms,
         "Jitter buffer in ms (default 200, the first knob to tune)", "MS" },
+    { "no-relay", 0, 0, G_OPTION_ARG_NONE, &self.no_relay,
+        "Allow direct ICE. LAN testing only — both peers learn each other's address", NULL },
     { NULL },
   };
 
@@ -887,6 +894,10 @@ main (int argc, char *argv[])
      * and the server rate-limits joins. Do not treat this value as a secret. */
     self.code = g_strdup_printf ("%06u", g_random_int_range (0, 1000000));
   }
+
+  if (self.no_relay)
+    g_printerr ("--no-relay: ICE is not restricted to the relay, so this "
+        "session's peers will see each other's addresses\n");
 
   gtk_init ();
 

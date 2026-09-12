@@ -22,11 +22,16 @@ class IceServers {
   final String credential;
 
   /// Relay is forced, so the TURN entry is the entire ICE configuration.
-  Map<String, dynamic> toConfiguration() => {
+  ///
+  /// [relayOnly] false is for LAN bring-up only: it lets ICE use host and
+  /// server-reflexive candidates, which means the two peers learn each other's
+  /// addresses. That is exactly what the product promises not to do, so it is
+  /// off unless someone passes --dart-define=AIRCAST_RELAY=false.
+  Map<String, dynamic> toConfiguration({bool relayOnly = true}) => {
         'iceServers': [
           {'urls': urls, 'username': username, 'credential': credential},
         ],
-        'iceTransportPolicy': 'relay',
+        'iceTransportPolicy': relayOnly ? 'relay' : 'all',
         'sdpSemantics': 'unified-plan',
       };
 }

@@ -19,6 +19,11 @@ class CastSession {
   /// 6 Mbit/s, the 1080p ceiling from #8.
   static const maxBitrateBps = 6000000;
 
+  /// `--dart-define=AIRCAST_RELAY=false` drops the relay-only rule so a phone
+  /// and a desktop on one LAN can talk without a TURN server in the middle.
+  /// Testing aid: it leaks both addresses to the other peer.
+  static const relayOnly = bool.fromEnvironment('AIRCAST_RELAY', defaultValue: true);
+
   RTCPeerConnection? _pc;
   MediaStream? _stream;
 
@@ -40,7 +45,7 @@ class CastSession {
       'audio': false,
     });
 
-    final pc = await createPeerConnection(turn.toConfiguration());
+    final pc = await createPeerConnection(turn.toConfiguration(relayOnly: relayOnly));
     _pc = pc;
 
     for (final track in _stream!.getVideoTracks()) {
