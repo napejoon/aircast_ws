@@ -74,7 +74,9 @@ jobs:
       - name: Build MSI
         shell: pwsh
         run: |
-          dotnet tool install --global wix --version 7.0.0
+          # v5 is the last series before WiX gated every command behind the
+          # Open Source Maintenance Fee EULA. See ci.yml.
+          dotnet tool install --global wix --version 5.0.2
           wix build installer/aircast.wxs -arch x64 -d Ver=$env:VERSION -b stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
           wix msi validate -ice ICE105 "Aircast-Receiver-$env:VERSION-x64.msi"
 

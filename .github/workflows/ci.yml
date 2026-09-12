@@ -223,7 +223,11 @@ jobs:
       - name: Build MSI
         shell: pwsh
         run: |
-          dotnet tool install --global wix --version 7.0.0
+          # WiX v7 refuses to run until the Open Source Maintenance Fee EULA is
+          # accepted, and accepting it is documented as following payment. v5 is
+          # the last series without that gate, and it has the <Files> harvesting
+          # this installer is built on.
+          dotnet tool install --global wix --version 5.0.2
           wix build installer/aircast.wxs -arch x64 -d Ver=$env:VERSION -b stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
           # wix build runs no ICEs of its own. ICE105 is the dual-purpose-package
           # gate, and whether <Files> harvesting passes it is unsourced — so it
