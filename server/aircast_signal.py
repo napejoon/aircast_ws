@@ -60,12 +60,19 @@ def turn_credentials(secret: str, urls: list[str], ttl: int) -> dict:
 def client_ip(ws: ServerConnection) -> str:
     """The throttle buckets by client, and in production every connection
     arrives from the reverse proxy on loopback — so one bucket would lock out
-    everyone. Trust X-Forwarded-For only from loopback, where the proxy is."""
+    everyone. Trust X-Forwarded-For only from loopback, where the proxy is.
+
+    The LAST element, not the first. A proxy appends what it saw to whatever the
+    client sent, so the first element is attacker-controlled: reading it let
+    anyone mint a fresh bucket per request and walk the 6-digit space with the
+    throttle — the only defence this design has — switched off. The proxy config
+    overwrites the header for the same reason; this is the half that survives a
+    proxy someone else configures."""
     peer = ws.remote_address[0] if ws.remote_address else "?"
     if peer in ("127.0.0.1", "::1"):
         forwarded = ws.request.headers.get("X-Forwarded-For") if ws.request else None
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            return forwarded.split(",")[-1].strip()
     return peer
 
 
@@ -144,9 +151,12 @@ class Server:
             return None, None
 
         self._expire()
-        # Joining a code nobody is waiting on is what guessing looks like. The
-        # sender legitimately arrives first, so only a receiver is charged.
-        if role == "receiver" and code not in self.pairings:
+        # Joining a code nobody is waiting on is what guessing looks like, and
+        # the receiver is the one that invents the code and puts it on screen —
+        # so the receiver is always first, and charging it meant every ordinary
+        # start of the program spent one of its own ten attempts while a sender
+        # could guess forever for free.
+        if role == "sender" and code not in self.pairings:
             self._miss(ip)
         pairing = self.pairings.setdefault(code, Pairing())
         if role in pairing.peers:

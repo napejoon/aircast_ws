@@ -397,12 +397,19 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint code,
 
 /* ---------------------------------------------------------------- signalling */
 
-/* webrtcbin wants one URI "turn(s)://user:pass@host:port", while the server
- * sends a urls array plus separate credentials. Take the first turn: URL and
- * splice the credentials in, percent-encoding them — a minted username is
- * "<expiry>:<id>" and that colon would otherwise end the userinfo early. */
-static gchar *
-turn_uri (JsonObject *turn)
+/* webrtcbin wants URIs shaped "turn(s)://user:pass@host:port", while the server
+ * sends a urls array plus separate credentials. Splice the credentials into
+ * every usable entry, percent-encoding them — a minted username is
+ * "<expiry>:<id>" and that colon would otherwise end the userinfo early.
+ *
+ * Every entry, not just the first. The "turn-server" property holds exactly
+ * one URI and the server lists the UDP entry first, so taking the first left
+ * the receiver with no fallback at all on a network that drops outbound UDP —
+ * and relay-only ICE means one stranded leg is zero sessions, however well the
+ * phone connected. webrtcbin's own documentation says to use the
+ * add-turn-server action signal when there is more than one. */
+static GStrv
+turn_uris (JsonObject *turn)
 {
   /* A server that omits any of these is not trusted to crash us. */
   if (!json_object_has_member (turn, "urls") ||
@@ -413,12 +420,13 @@ turn_uri (JsonObject *turn)
   JsonArray *urls = json_object_get_array_member (turn, "urls");
   const gchar *user = json_object_get_string_member (turn, "username");
   const gchar *pass = json_object_get_string_member (turn, "credential");
-  gchar *uri = NULL;
+  GPtrArray *out;
 
   if (!urls || !user || !pass)
     return NULL;
 
-  for (guint i = 0; i < json_array_get_length (urls) && !uri; i++) {
+  out = g_ptr_array_new ();
+  for (guint i = 0; i < json_array_get_length (urls); i++) {
     const gchar *url = json_array_get_string_element (urls, i);
     const gchar *scheme = NULL;
 
@@ -435,17 +443,48 @@ turn_uri (JsonObject *turn)
     /* Drop any ?transport= suffix: webrtcbin parses it as part of the port. */
     gchar **parts = g_strsplit (host, "?", 2);
 
-    uri = g_strdup_printf ("%s://%s:%s@%s", scheme, escaped_user, escaped_pass, parts[0]);
+    g_ptr_array_add (out, g_strdup_printf ("%s://%s:%s@%s",
+        scheme, escaped_user, escaped_pass, parts[0]));
     g_strfreev (parts);
     g_free (escaped_user);
     g_free (escaped_pass);
   }
-  return uri;
+
+  if (out->len == 0) {
+    g_ptr_array_free (out, TRUE);
+    return NULL;
+  }
+  g_ptr_array_add (out, NULL);
+  return (GStrv) g_ptr_array_free (out, FALSE);
+}
+
+/* The mid of the m-line a candidate belongs to, read out of our own local
+ * description. docs/protocol/signalling.md says a candidate carries both
+ * sdpMid and sdpMLineIndex; we were sending only the index, and the sender
+ * passes whatever arrives straight into RTCIceCandidate. Returns NULL when the
+ * description is not there yet, in which case the member is simply omitted —
+ * the index alone is a valid candidate. Copied, because the attribute belongs
+ * to the description this function frees. */
+static gchar *
+candidate_mid (GstElement *webrtc, guint mline)
+{
+  GstWebRTCSessionDescription *local = NULL;
+  gchar *mid = NULL;
+
+  g_object_get (webrtc, "local-description", &local, NULL);
+  if (local && local->sdp && mline < gst_sdp_message_medias_len (local->sdp)) {
+    const GstSDPMedia *media = gst_sdp_message_get_media (local->sdp, mline);
+    mid = g_strdup (gst_sdp_media_get_attribute_val (media, "mid"));
+  }
+  if (local)
+    gst_webrtc_session_description_free (local);
+  return mid;
 }
 
 static void
 on_ice_candidate (GstElement *webrtc, guint mline, gchar *candidate, App *self)
 {
+  gchar *mid = candidate_mid (webrtc, mline);
   JsonBuilder *b = json_builder_new ();
   json_builder_begin_object (b);
   json_builder_set_member_name (b, "type");
@@ -454,10 +493,15 @@ on_ice_candidate (GstElement *webrtc, guint mline, gchar *candidate, App *self)
   json_builder_begin_object (b);
   json_builder_set_member_name (b, "candidate");
   json_builder_add_string_value (b, candidate);
+  if (mid) {
+    json_builder_set_member_name (b, "sdpMid");
+    json_builder_add_string_value (b, mid);
+  }
   json_builder_set_member_name (b, "sdpMLineIndex");
   json_builder_add_int_value (b, mline);
   json_builder_end_object (b);
   json_builder_end_object (b);
+  g_free (mid);
   send_json (self, b);
 }
 
@@ -478,8 +522,8 @@ on_connection_state (GstElement *webrtc, GParamSpec *pspec, App *self)
 static gboolean
 build_pipeline (App *self, JsonObject *turn)
 {
-  gchar *uri = turn_uri (turn);
-  if (!uri && !self->no_relay) {
+  GStrv uris = turn_uris (turn);
+  if (!uris && !self->no_relay) {
     set_status (self, "The server sent no usable TURN URL");
     return FALSE;
   }
@@ -488,7 +532,7 @@ build_pipeline (App *self, JsonObject *turn)
   self->webrtc = gst_element_factory_make ("webrtcbin", "recv");
   if (!self->webrtc) {
     set_status (self, "webrtcbin is missing — install gstreamer1.0-plugins-bad");
-    g_free (uri);
+    g_strfreev (uris);
     return FALSE;
   }
 
@@ -501,9 +545,23 @@ build_pipeline (App *self, JsonObject *turn)
           : GST_WEBRTC_ICE_TRANSPORT_POLICY_RELAY,
       "latency", self->latency_ms,
       NULL);
-  if (uri)
-    g_object_set (self->webrtc, "turn-server", uri, NULL);
-  g_free (uri);
+  /* add-turn-server rather than the turn-server property, so the UDP entry and
+   * the TCP/TLS ones are all offered and ICE picks whichever the network
+   * permits. It returns FALSE for a URI it could not parse; one bad entry is
+   * not a reason to abandon the others, but a run where none of them took is
+   * worth seeing in the log. */
+  guint accepted = 0;
+  for (guint i = 0; uris && uris[i]; i++) {
+    gboolean ok = FALSE;
+    g_signal_emit_by_name (self->webrtc, "add-turn-server", uris[i], &ok);
+    if (ok)
+      accepted++;
+    else
+      g_warning ("webrtcbin refused a TURN URI from the server");
+  }
+  if (uris && accepted == 0)
+    g_warning ("no TURN URI was accepted; relay-only ICE will not connect");
+  g_strfreev (uris);
 
   gst_bin_add (GST_BIN (self->pipeline), self->webrtc);
   g_signal_connect (self->webrtc, "pad-added", G_CALLBACK (on_pad_added), self);

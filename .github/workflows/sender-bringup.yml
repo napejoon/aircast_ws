@@ -19,11 +19,11 @@ on:
         required: true
         type: string
       relay:
-        description: "AIRCAST_RELAY — false lets ICE use LAN candidates when there is no coturn"
+        description: "AIRCAST_RELAY — true for a real deployment with coturn; false only for a LAN with none"
         required: true
         type: choice
-        options: ["false", "true"]
-        default: "false"
+        options: ["true", "false"]
+        default: "true"
 
 permissions:
   contents: read

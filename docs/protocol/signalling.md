@@ -50,11 +50,21 @@ goes first.
 ## Abuse
 
 A 6-digit code is a guessable space, so the code is not a secret — the server
-is the defence. It charges a *miss* to a receiver that joins a code no sender is
-waiting on, and refuses a client past `AIRCAST_MAX_MISSES` (default 10) misses
-per minute. A sender legitimately arrives first, so it is never charged.
+is the defence. It charges a *miss* to a **sender** that joins a code no
+receiver is waiting on, and refuses a client past `AIRCAST_MAX_MISSES`
+(default 10) misses per minute.
+
+The role matters and was once written the other way round. The receiver invents
+the code and displays it, so the receiver is always first and its code is never
+"already waiting" — charging it meant every ordinary start of the program spent
+one of its own ten attempts, while the sender, the only side that can type a
+code it does not know, was never charged at all.
 
 Behind a reverse proxy every connection arrives from loopback, so the server
-trusts `X-Forwarded-For` **only** when the peer address is loopback. The proxy
-must set it (`ops/nginx-aircast-signal.conf.template` does); without it the
+trusts `X-Forwarded-For` **only** when the peer address is loopback, and reads
+the **last** element of it. A proxy appends what it saw to whatever the client
+sent, so the first element is the client's own string: reading that let anyone
+mint a fresh bucket per request and guess without limit. The proxy must also
+overwrite the header rather than append to it
+(`ops/nginx-aircast-signal.conf.template` does); without the header at all, the
 whole internet would share one bucket.
