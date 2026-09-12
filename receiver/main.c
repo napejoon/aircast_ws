@@ -93,6 +93,15 @@ typedef struct {
 static void
 harden_environment (void)
 {
+#ifdef G_OS_WIN32
+  /* Windows only, and deliberately. On Linux these variables are the user's own
+   * — GST_PLUGIN_PATH is how receiver/README.md says to reach the gtk4
+   * paintable sink that apt does not ship, and clearing it made the program
+   * report that plugin missing on a machine where it is installed. Nothing is
+   * defended by clearing them there: anyone who can set this process's
+   * environment can run code as this user anyway. HKCU\Environment is the
+   * asymmetry, and it only exists on Windows.
+   */
   g_unsetenv ("GIO_EXTRA_MODULES");
   g_unsetenv ("GIO_USE_TLS");
   g_unsetenv ("GST_PLUGIN_PATH");
@@ -101,7 +110,6 @@ harden_environment (void)
   g_unsetenv ("GST_PLUGIN_SYSTEM_PATH_1_0");
   g_unsetenv ("GST_REGISTRY");
 
-#ifdef G_OS_WIN32
   /* The Windows build ships as a relocatable bundle: bin/ holds the exe and
    * every DLL, and each layer finds its data by walking up from the DLL it was
    * loaded from. XDG_DATA_DIRS defeats that — when it is set and non-empty,
