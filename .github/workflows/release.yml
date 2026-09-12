@@ -241,10 +241,6 @@ jobs:
           Windows will show "Windows protected your PC" — the installer is not
           code-signed. Click **More info -> Run anyway**, or do not install it.
 
-          Before this release is published, `aircast-update.json` and
-          `aircast-update.json.minisig` must be attached. Without them every
-          installed copy reports that it could not verify an update.
-
           Any asset here whose name ends `-unsigned.apk` cannot be installed:
           Android refuses an unsigned package. It is the input to the
           maintainer's offline signing step, and the signed
