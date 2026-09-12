@@ -82,9 +82,14 @@ class CastSession {
     pc.onIceCandidate = (c) => _signaling.sendCandidate(c.toMap().cast<String, dynamic>());
     _signaling.onAnswer = (sdp) async =>
         pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+    // sdpMid defaults to empty rather than null on purpose: libwebrtc's JNI
+    // hands a null mid straight to a CHECK and aborts the process from
+    // nativeAddIceCandidate, so one peer omitting a field the protocol calls
+    // optional kills this app with no error anywhere. An empty mid is resolved
+    // from sdpMLineIndex, which every peer sends.
     _signaling.onCandidate = (c) async => pc.addCandidate(RTCIceCandidate(
           c['candidate'] as String?,
-          c['sdpMid'] as String?,
+          (c['sdpMid'] as String?) ?? '',
           c['sdpMLineIndex'] as int?,
         ));
 
