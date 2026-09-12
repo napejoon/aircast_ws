@@ -36,13 +36,18 @@ cp "$PREFIX"/lib/gstreamer-1.0/*.dll "$OUT/lib/gstreamer-1.0/"
 # ntldd -R prints three shapes per line:
 #   "\tNAME (0xADDR)"            a system DLL, no path — skip
 #   "\tNAME => PATH (0xADDR)"    resolved — take PATH when it is ours
-#   "\tNAME => not found"        broken, and fatal here rather than at runtime
+#   "\tNAME => not found"        unresolved
+#
+# "not found" is mostly noise: api-ms-win-* and ext-ms-win-* are API sets, which
+# are virtual names the loader resolves through a schema and which have no file
+# to find, and the rest are optional system DLLs a given Windows edition may
+# simply not have. Reporting them is useful; failing on them would mean this
+# script never runs anywhere. The real gate is the smoke test, which loads every
+# plugin with MSYS2 off the PATH.
 closure () {
-  if ntldd -R "$1" 2>/dev/null | grep -q 'not found'; then
-    echo "FATAL: unresolved import under $1" >&2
-    ntldd -R "$1" | grep 'not found' >&2
-    exit 1
-  fi
+  ntldd -R "$1" 2>/dev/null | grep 'not found' \
+    | grep -viE '(api|ext)-ms-win-' | sed "s|^|  unresolved under $1: |" >&2 || true
+
   ntldd -R "$1" 2>/dev/null | tr '\\' '/' \
     | sed -n 's/^[[:space:]]*[^ ]* => \(.*\) (0x[0-9a-fA-F]*)$/\1/p' \
     | grep -i '/ucrt64/'
