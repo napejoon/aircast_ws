@@ -15,5 +15,14 @@ class UsbCast {
   static Future<void> start({String socketName = 'aircast', int bitrate = 6000000}) =>
       _channel.invokeMethod('start', {'socketName': socketName, 'bitrate': bitrate});
 
+  /// Raises the same foreground service with nothing to do but exist: the
+  /// notification, no consent token, no VirtualDisplay, no socket. The WebRTC
+  /// path needs it because flutter_webrtc starts no service of its own and the
+  /// platform kills an app that calls getMediaProjection() without one.
+  ///
+  /// Call it after consent is granted and before getDisplayMedia.
+  static Future<void> holdForeground() => _channel.invokeMethod('holdForeground');
+
+  /// Stops the capture and releases the service, on either path.
   static Future<void> stop() => _channel.invokeMethod('stop');
 }

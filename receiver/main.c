@@ -1075,7 +1075,7 @@ main (int argc, char *argv[])
 
   GOptionEntry entries[] = {
     { "signal", 's', 0, G_OPTION_ARG_STRING, &self.signal_url,
-        "Signalling server URL, e.g. wss://signal.example.com/ws", "URL" },
+        "Signalling server URL (default: " AIRCAST_SIGNAL ")", "URL" },
     { "code", 'c', 0, G_OPTION_ARG_STRING, &self.code,
         "6-digit pairing code (generated and shown if omitted)", "CODE" },
     { "record-dir", 'r', 0, G_OPTION_ARG_FILENAME, &self.record_dir,
@@ -1116,9 +1116,16 @@ main (int argc, char *argv[])
     return aircast_update_selftest_manifest (self.verify_manifest, self.verify_signature);
   }
 
+  /* The default is compiled in so that the installed program is a program:
+   * double-click the shortcut and it works, with no terminal and no flags.
+   * --signal stays, because anyone running their own relay needs it, and a
+   * build with the define empty still demands one rather than guessing. */
   if (!self.signal_url) {
-    g_printerr ("--signal is required\n");
-    return 1;
+    if (AIRCAST_SIGNAL[0] == '\0') {
+      g_printerr ("--signal is required: this build has no default\n");
+      return 1;
+    }
+    self.signal_url = g_strdup (AIRCAST_SIGNAL);
   }
 
   /* wss:// only. A plaintext signalling channel hands the pairing code and both

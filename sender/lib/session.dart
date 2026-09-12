@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'signaling.dart';
+import 'usb.dart';
 
 /// One cast session: screen capture in, WebRTC out, relayed through our TURN.
 ///
@@ -34,8 +35,27 @@ class CastSession {
   Future<void> start() async {
     final turn = await _signaling.turn;
 
-    // Android: the consent prompt and the mediaProjection foreground service
-    // both live behind this call, in flutter_webrtc's GetUserMediaImpl.
+    // Android enforces three steps in this order, and the middle one is ours.
+    // flutter_webrtc takes consent and then calls getMediaProjection() without
+    // starting any service — its Android manifest declares none — and since
+    // targetSdk 29 the platform answers that with
+    //   SecurityException: Media projections require a foreground service of
+    //   type ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+    // thrown on the main thread from native code, which kills the process
+    // before any catch here runs. The app simply vanishes, with no Dart error
+    // anywhere: that was the bug, on a Tab S10 FE running Android 16.
+    //
+    // Consent first, because a mediaProjection foreground service cannot be
+    // started for an app the user has not granted capture to; the service
+    // second; the capture last. requestCapturePermission caches the token it
+    // obtains and getDisplayMedia reuses it, so the user still sees one dialog.
+    if (Platform.isAndroid) {
+      if (!await Helper.requestCapturePermission()) {
+        throw Exception('Screen sharing was declined');
+      }
+      await UsbCast.holdForeground();
+    }
+
     // iOS: 'broadcast' selects the Broadcast Upload Extension, which is the
     // only way to capture the whole screen rather than this app's own window
     // (sender/ios/README.md). Without the extension installed the call falls
@@ -62,9 +82,14 @@ class CastSession {
     pc.onIceCandidate = (c) => _signaling.sendCandidate(c.toMap().cast<String, dynamic>());
     _signaling.onAnswer = (sdp) async =>
         pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+    // sdpMid defaults to empty rather than null on purpose: libwebrtc's JNI
+    // hands a null mid straight to a CHECK and aborts the process from
+    // nativeAddIceCandidate, so one peer omitting a field the protocol calls
+    // optional kills this app with no error anywhere. An empty mid is resolved
+    // from sdpMLineIndex, which every peer sends.
     _signaling.onCandidate = (c) async => pc.addCandidate(RTCIceCandidate(
           c['candidate'] as String?,
-          c['sdpMid'] as String?,
+          (c['sdpMid'] as String?) ?? '',
           c['sdpMLineIndex'] as int?,
         ));
 
@@ -124,5 +149,8 @@ class CastSession {
     await _pc?.close();
     _stream = null;
     _pc = null;
+    // The notification outlives the capture, not the other way round. A no-op
+    // when start() never got as far as raising it.
+    if (Platform.isAndroid) await UsbCast.stop();
   }
 }

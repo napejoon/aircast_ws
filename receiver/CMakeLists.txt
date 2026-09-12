@@ -7,6 +7,13 @@ set(CMAKE_C_STANDARD 11)
 # a tag stamps 0.0.0, which every real release compares newer than.
 set(AIRCAST_VERSION "0.0.0" CACHE STRING "version compiled into the binary")
 
+# The relay this build talks to unless --signal says otherwise. Compiled in
+# rather than read from a config file, for the same reason the update key is:
+# a file beside the exe is one an attacker can edit, and the whole point of the
+# signalling URL is that both peers agree on who is in the middle. Empty means
+# "no default", and the program then insists on --signal as it always did.
+set(AIRCAST_SIGNAL "wss://aircast.cloud/ws" CACHE STRING "default signalling URL")
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DEPS REQUIRED
     gtk4
@@ -22,7 +29,7 @@ pkg_check_modules(DEPS REQUIRED
 )
 
 add_executable(aircast-receiver main.c update_check.c)
-target_compile_definitions(aircast-receiver PRIVATE AIRCAST_VERSION="${AIRCAST_VERSION}")
+target_compile_definitions(aircast-receiver PRIVATE AIRCAST_VERSION="${AIRCAST_VERSION}" AIRCAST_SIGNAL="${AIRCAST_SIGNAL}")
 # style.css.h is #included by main.c and lives beside it.
 target_include_directories(aircast-receiver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${DEPS_INCLUDE_DIRS})
 target_link_directories(aircast-receiver PRIVATE ${DEPS_LIBRARY_DIRS})
