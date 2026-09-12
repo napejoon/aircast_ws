@@ -23,6 +23,17 @@
   what exists, so Files/@Include silently found nothing and produced a 35 KB
   installer of one executable.
 
+  The exe is declared explicitly, and inside bin/, because a Shortcut needs a
+  File to point at — and Source only says where the bits come from: the install
+  target is the parent Directory. Declared straight under INSTALLFOLDER it
+  installed to the install root while the harvest recreated the staged tree and
+  put all 500-odd DLLs in bin/, so the installed program died before main():
+  those DLLs are static imports, and the loader resolves them from the
+  application directory. main.c also derives <root>/share/glib-2.0/schemas by
+  walking up out of bin, which only works from bin. CI now extracts the built
+  package and checks that layout — the smoke test only ever looked at the
+  staged tree, which was always right.
+
   UpgradeCode is generated once and committed forever. Changing it gives a user
   two side-by-side installations fighting over the plugin scan.
 -->
@@ -38,12 +49,14 @@
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="Aircast Receiver">
-        <Component>
-          <File Id="AircastExe" Source="$(var.Stage)\bin\aircast-receiver.exe" />
-          <Shortcut Directory="ShortcutFolder" Name="Aircast Receiver"
-                    Target="[#AircastExe]" WorkingDirectory="INSTALLFOLDER" />
-          <RemoveFolder Id="CleanShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
-        </Component>
+        <Directory Id="BinFolder" Name="bin">
+          <Component>
+            <File Id="AircastExe" Source="$(var.Stage)\bin\aircast-receiver.exe" />
+            <Shortcut Directory="ShortcutFolder" Name="Aircast Receiver"
+                      Target="[#AircastExe]" WorkingDirectory="BinFolder" />
+            <RemoveFolder Id="CleanShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
+          </Component>
+        </Directory>
 
         <!-- The Exclude is load-bearing: without it the exe is harvested twice
              and the build fails. -->
