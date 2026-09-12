@@ -897,8 +897,7 @@ main (int argc, char *argv[])
 
   if (self.no_relay)
     g_printerr ("--no-relay: ICE is not restricted to the relay, so this "
-        "session's peers will see each other's addresses
-");
+        "session's peers will see each other's addresses\n");
 
   gtk_init ();
 
