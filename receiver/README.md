@@ -101,12 +101,19 @@ build's key, which is the last step of the release ceremony.
 
 ```bash
 cmake -B build && cmake --build build
-./build/aircast-receiver --signal wss://signal.example.com/ws
+./build/aircast-receiver
 ```
+
+The signalling URL is compiled in — `AIRCAST_SIGNAL`, default
+`wss://aircast.cloud/ws` — so the installed program needs no arguments at all:
+the Start Menu shortcut opens a window with a pairing code in it. Point a build
+at your own relay with `cmake -B build -DAIRCAST_SIGNAL=wss://you.example/ws`,
+or one run of it with `--signal`. A build configured with an empty string still
+insists on the flag rather than guessing.
 
 | Flag | Meaning |
 |---|---|
-| `--signal` | signalling server URL (required) |
+| `--signal` | signalling server URL; overrides the compiled-in default |
 | `--code` | pairing code; generated and displayed when omitted |
 | `--record-dir` | where the record button writes `aircast-<timestamp>.mkv` (default: home) |
 | `--latency` | jitter buffer in ms, default 200; first knob against the 200-500 ms budget |
