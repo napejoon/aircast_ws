@@ -395,7 +395,19 @@ one by SNI alone — libwebrtc sends no ALPN and no API sets one — so
    before coturn — which cannot parse it. coturn's own `--tcp-proxy-port`
    would, but turning it on disables the normal TCP and TLS listeners.
 
-4. **Restart nginx. Not reload.** The running worker holds 443 as an *http*
+4. **Before restarting, prove no http vhost still owns 443:**
+   ```
+   nginx -T | grep -cE '^\s*listen [^;]*443[^;]* ssl'    # must print 0
+   ```
+   `nginx -t` will not tell you. It merges duplicate listens *within* http and
+   never compares http against stream, so a vhost you missed passes the test
+   and then the restart fails to bind and nginx stays down. The one that was
+   missed here lived in `sites-enabled/default`, a file that looks like the
+   stock placeholder and had a certbot-managed 443 block for a third site at
+   line 144 — `grep listen` with `head` on the output is how it was missed.
+   Read the whole `nginx -T`, not the files you think are relevant.
+
+5. **Restart nginx. Not reload.** The running worker holds 443 as an *http*
    socket and the new configuration wants it as a *stream* socket; a reload
    logs
    ```
@@ -406,7 +418,7 @@ one by SNI alone — libwebrtc sends no ALPN and no API sets one — so
    advertised, and every client on a locked-down network spends a timeout on
    it. The proof is `ss -lntp | grep -E '127.0.0.1:(8444|8446)'` — two lines.
 
-5. **Advertise it last**, once step 4's check passes:
+6. **Advertise it last**, once step 5's check passes:
    ```
    AIRCAST_TURN_URLS=turn:<TURN_DOMAIN>:3478?transport=udp,turn:<TURN_DOMAIN>:443?transport=udp,turns:<TURN_DOMAIN>:5349?transport=tcp,turns:<TURN_DOMAIN>:443?transport=tcp
    ```
