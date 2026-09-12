@@ -58,7 +58,7 @@ cmake -S receiver -B receiver/build && cmake --build receiver/build
 ./receiver/build/aircast-receiver --signal ws://127.0.0.1:8443/ws --record cast.mkv
 
 # 3. sender
-cd sender && flutter create --platforms=android,ios --org io.aircast --project-name aircast_sender .
+bash tools/scaffold-sender.sh && cd sender
 flutter run --dart-define=AIRCAST_SIGNAL=ws://<host>:8443/ws
 ```
 
@@ -104,7 +104,7 @@ Everything is written. Almost none of it has met real hardware.
 | `server/`, `tools/` | — | yes, locally and in CI (11 tests) |
 | `receiver/` | CI, `-Wall -Werror` | **never** |
 | `gtk4paintablesink` | CI, from pinned sources | loads in CI; never rendered a frame |
-| `sender/` Android | CI, debug APK | **never on a device** |
+| `sender/` Android | CI, debug APK; unsigned release APK on a tag | **never on a device** |
 | `sender/` iOS | not built anywhere | **never** |
 | USB path | compiles inside the APK | **never carried a frame** |
 

@@ -19,23 +19,23 @@ already asks for it.
 
 ## Build
 
-The generated Flutter scaffold is not committed. Once, in this directory:
+The generated Flutter scaffold is not committed. Once, from the repo root:
 
 ```bash
-flutter create --platforms=android,ios --org io.aircast --project-name aircast_sender .
+bash tools/scaffold-sender.sh
 ```
 
-It will not overwrite the files that are here. Then:
+It runs `flutter create`, which will not overwrite the files that are here, and
+then patches `android/app/build.gradle.kts`: SDK levels, and the removal of the
+scaffold's debug signing config. CI runs the same script, so what you build
+locally is what gets released. Then:
 
 ```bash
+cd sender
 flutter pub get
 flutter test
 flutter run --dart-define=AIRCAST_SIGNAL=wss://signal.example.com/ws
 ```
-
-In `android/app/build.gradle.kts`, after the scaffold is generated, set
-`minSdk = 23` (`flutter_webrtc`'s floor) and `compileSdk = 36` (what flutter_webrtc 1.6 demands; androidx.fragment
-refuses to be compiled against anything below 34). CI does both with `sed`.
 
 The manifest names `io.aircast.sender.MainActivity` and `.UsbCastService` in
 full, because the Gradle namespace `flutter create` derives from the project

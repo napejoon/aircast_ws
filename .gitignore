@@ -15,15 +15,24 @@ log/
 sender/android/.gradle/
 sender/ios/Pods/
 
-# CMake
-receiver/build/
-
-# Flutter / Dart
-.dart_tool/
-.packages
-*.iml
-sender/android/.gradle/
-sender/ios/Pods/
+# The scaffold tools/scaffold-sender.sh regenerates. Committing any of it means
+# `flutter create` stops refreshing it, and the script's pin guards then pass
+# against a file that no longer tracks the template. local.properties also
+# carries a machine-specific absolute SDK path.
+sender/android/local.properties
+sender/android/gradle.properties
+sender/android/gradlew
+sender/android/gradlew.bat
+sender/android/gradle/
+sender/android/*.gradle.kts
+sender/android/app/*.gradle.kts
+sender/android/app/src/main/res/
+sender/android/app/src/debug/
+sender/android/app/src/profile/
+sender/ios/Runner/
+sender/ios/Runner.xcodeproj/
+sender/ios/Runner.xcworkspace/
+sender/ios/Flutter/
 
 # CMake
 receiver/build/

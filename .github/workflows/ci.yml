@@ -65,13 +65,10 @@ jobs:
         with:
           channel: stable
       - name: Restore the scaffold
-        # The generated platform scaffold is not committed; `flutter create`
-        # fills it in without touching the files that are.
-        working-directory: sender
-        run: |
-          flutter create --platforms=android,ios --org io.aircast --project-name aircast_sender .
-          # The scaffold drops in a widget test for a MyApp that is not ours.
-          rm -f test/widget_test.dart
+        # The generated platform scaffold is not committed; the script fills it
+        # in without touching the files that are, and applies the gradle patches
+        # the Android jobs and release.yml all depend on.
+        run: bash tools/scaffold-sender.sh
       - name: Analyse
         working-directory: sender
         run: |
@@ -94,20 +91,34 @@ jobs:
         with:
           channel: stable
       - name: Restore the scaffold
-        working-directory: sender
-        run: flutter create --platforms=android --org io.aircast --project-name aircast_sender .
-      - name: Pin the SDK levels
-        # flutter_webrtc needs minSdk 23, and androidx.fragment refuses to be
-        # compiled against anything below 36. Cheaper than committing a patched
-        # gradle file that the scaffold would have to merge with.
-        working-directory: sender/android/app
-        run: |
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' build.gradle.kts
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' build.gradle.kts
-          grep -E 'minSdk|compileSdk' build.gradle.kts
+        run: bash tools/scaffold-sender.sh
       - name: Build
+        # Debug, because this is the APK a maintainer hands someone to try: the
+        # release build is unsigned by design and Android will not install it.
+        # Renamed, because app-debug.apk says nothing on the recipient's phone.
         working-directory: sender
-        run: flutter build apk --debug
+        run: |
+          flutter build apk --debug
+          mv build/app/outputs/flutter-apk/app-debug.apk Aircast-Sender-debug.apk
+      - name: The release path release.yml depends on
+        # Built and thrown away. This is where R8, resource shrinking and the
+        # AOT compiler run, and where AGP's -unsigned rename — the gate that
+        # keeps a debug-keyed APK out of a release — is proved to still happen.
+        # Without it the first --release build of this project would be the one
+        # on the tag, in the job that has to succeed for the MSI to ship.
+        working-directory: sender
+        run: |
+          flutter build apk --release
+          test -f build/app/outputs/apk/release/app-release-unsigned.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        # Pushes only: on a pull_request this job builds the contributor's code,
+        # and an installable APK published under this repository's Actions tab
+        # is one this repository did not write.
+        if: github.event_name == 'push'
+        with:
+          name: aircast-sender-debug-apk
+          path: sender/Aircast-Sender-debug.apk
+          if-no-files-found: error
 
   paintablesink:
     name: gtk4paintablesink (the plugin apt does not ship)
