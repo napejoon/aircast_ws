@@ -59,7 +59,16 @@ class UsbCastService : Service() {
             // SecurityException thrown on the main thread from native code —
             // which kills the process before any Dart catch can see it. This
             // action exists so that call has somewhere to stand.
-            ACTION_HOLD -> startForegroundWithNotification("Casting this screen")
+            ACTION_HOLD -> {
+                startForegroundWithNotification("Casting this screen")
+                // Only now is getMediaProjection() legal. The plugin waits for
+                // this before answering Dart, because startForegroundService()
+                // returns before onStartCommand has run, and a getDisplayMedia
+                // that races it dies with the same SecurityException this action
+                // exists to prevent.
+                onForeground?.invoke()
+                onForeground = null
+            }
         }
         return START_NOT_STICKY
     }
@@ -226,6 +235,10 @@ class UsbCastService : Service() {
         const val ACTION_START = "io.aircast.sender.USB_START"
         const val ACTION_STOP = "io.aircast.sender.USB_STOP"
         const val ACTION_HOLD = "io.aircast.sender.HOLD_FOREGROUND"
+
+        /** Set by UsbCastPlugin before it starts ACTION_HOLD; fired once startForeground has run. */
+        @Volatile
+        var onForeground: (() -> Unit)? = null
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
         const val EXTRA_SOCKET_NAME = "socketName"
