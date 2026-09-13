@@ -522,6 +522,39 @@ on_connection_state (GstElement *webrtc, GParamSpec *pspec, App *self)
     post_ui (self, "The connection failed — is the TURN relay reachable?", "idle");
 }
 
+/* The only place a pipeline failure has ever been able to say anything. An
+ * element that fails after the pipeline is PLAYING posts to the bus and stops,
+ * and until now nothing read the bus, so both black windows this receiver has
+ * shipped looked identical from the outside: a healthy ICE connection and an
+ * empty page. A decoder chosen at runtime needs this before the choice is worth
+ * making, because the machine where the choice was wrong is otherwise
+ * indistinguishable from the machine where the phone never sent a frame.
+ * post_ui rather than set_status: the message arrives on whichever thread
+ * posted it, and post_ui already hops to the main context. */
+static gboolean
+on_bus_message (GstBus *bus, GstMessage *msg, gpointer data)
+{
+  App *self = data;
+  if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_ERROR) {
+    GError *err = NULL;
+    gchar *debug = NULL;
+    gst_message_parse_error (msg, &err, &debug);
+    /* A message can arrive with no source; naming it is the whole point of the
+     * line, so fall back rather than dereference nothing. */
+    GstObject *src = GST_MESSAGE_SRC (msg);
+    gchar *text = g_strdup_printf ("%s failed: %s",
+        src ? GST_OBJECT_NAME (src) : "The pipeline", err->message);
+    post_ui (self, text, NULL);
+    g_printerr ("%s
+%s
+", text, debug ? debug : "");
+    g_free (text);
+    g_free (debug);
+    g_error_free (err);
+  }
+  return G_SOURCE_CONTINUE;
+}
+
 /* A mirrored screen arriving over a relay is heavily reordered: on one run
  * 8,234 of 18,065 packets came in behind a higher sequence number, and every
  * one of them was less than 20 ms late. rtpjitterbuffer drops a packet it has
@@ -578,6 +611,10 @@ build_pipeline (App *self, JsonObject *turn)
   }
 
   self->pipeline = gst_pipeline_new ("aircast-receiver");
+  GstBus *bus = gst_element_get_bus (self->pipeline);
+  gst_bus_add_watch (bus, on_bus_message, self);
+  gst_object_unref (bus);
+
   self->webrtc = gst_element_factory_make ("webrtcbin", "recv");
   if (!self->webrtc) {
     set_status (self, "webrtcbin is missing — install gstreamer1.0-plugins-bad");
@@ -1152,9 +1189,14 @@ shutdown_app (GtkApplication *app, gpointer user_data)
   if (self->ws)
     soup_websocket_connection_close (self->ws, SOUP_WEBSOCKET_CLOSE_NORMAL, NULL);
   if (self->pipeline) {
+    /* The watch comes off before the EOS goes in. A bus watch drains every
+     * message, so with it still installed the EOS below is consumed by the
+     * handler and never reaches this pop, and a wait that normally returns in
+     * milliseconds becomes a flat three-second pause on every quit. */
+    GstBus *bus = gst_element_get_bus (self->pipeline);
+    gst_bus_remove_watch (bus);
     /* An EOS is what closes a recording's container cleanly. */
     gst_element_send_event (self->pipeline, gst_event_new_eos ());
-    GstBus *bus = gst_element_get_bus (self->pipeline);
     gst_bus_timed_pop_filtered (bus, 3 * GST_SECOND, GST_MESSAGE_EOS | GST_MESSAGE_ERROR);
     gst_object_unref (bus);
     gst_element_set_state (self->pipeline, GST_STATE_NULL);
