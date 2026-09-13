@@ -66,7 +66,12 @@ class Signaling {
 
     final channel = WebSocketChannel.connect(url);
     _channel = channel;
-    await channel.ready;
+    // A wrong host or port hangs in SYN_SENT for the kernel's minutes-long
+    // TCP timeout, and the UI sits on "connecting" with nothing in any log.
+    // Ten seconds is generous for a TLS handshake anywhere; past it, fail
+    // loudly with the URL so the mistake is readable.
+    await channel.ready.timeout(const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException('no answer from $url in 10 s'));
     _sub = channel.stream.listen(
       _onFrame,
       onError: (Object e) => _fail('$e'),
