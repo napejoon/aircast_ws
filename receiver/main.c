@@ -724,20 +724,31 @@ on_connected (GObject *session, GAsyncResult *result, gpointer user_data)
 
 typedef struct {
   App *self;
-  GdkPaintable *paintable;
+  GstElement *sink;
 } PaintableHandover;
 
+/* Runs on the main thread (g_idle_add), which is the only place gtk4paintablesink
+ * will hand out its paintable — the "paintable" property getter errors on any
+ * other thread, and on_pad_added runs on a streaming one. Fetching it here
+ * rather than there is the difference between a live picture and a blank one. */
 static gboolean
 attach_paintable (gpointer data)
 {
   PaintableHandover *handover = data;
   App *self = handover->self;
+  GdkPaintable *paintable = NULL;
 
-  gtk_picture_set_paintable (GTK_PICTURE (self->picture), handover->paintable);
-  show_page (self, "live");
-  wake_toolbar (self);
+  g_object_get (handover->sink, "paintable", &paintable, NULL);
+  if (paintable) {
+    gtk_picture_set_paintable (GTK_PICTURE (self->picture), paintable);
+    g_object_unref (paintable);
+    show_page (self, "live");
+    wake_toolbar (self);
+  } else {
+    set_status (self, "The video sink produced no paintable");
+  }
 
-  g_object_unref (handover->paintable);
+  gst_object_unref (handover->sink);
   g_free (handover);
   return G_SOURCE_REMOVE;
 }
@@ -813,8 +824,7 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
 
   PaintableHandover *handover = g_new0 (PaintableHandover, 1);
   handover->self = self;
-  g_object_get (sink, "paintable", &handover->paintable, NULL);
-  gst_object_unref (sink);
+  handover->sink = sink;        /* ref transferred; attach_paintable unrefs it */
   if (tee)
     gst_object_unref (tee);
   g_idle_add (attach_paintable, handover);
