@@ -8,11 +8,14 @@
  * Media path (docs/research/stack-options.md §2): webrtcbin's pads are
  * application/x-rtp only, so the tail is built per pad from the caps —
  *
- *   webrtcbin. ! rtph264depay ! h264parse ! tee ! queue ! avdec_h264 ! videoconvert ! gtk4paintablesink
+ *   webrtcbin. ! rtph264depay ! h264parse ! tee ! queue ! d3d11h264dec ! video/x-raw ! videoconvert ! gtk4paintablesink
  *                                             \ ! queue ! matroskamux ! filesink   (while recording)
  *
- * An explicit decoder, not decodebin: on Windows decodebin autoplugs the D3D11
- * hardware decoder, whose GPU-memory output the plain videoconvert cannot take.
+ * An explicit decoder, not decodebin, and d3d11h264dec only where the machine
+ * has it: avdec_h264 stands in everywhere else. The bare video/x-raw after the
+ * hardware decoder is not decoration. It is what makes the decoder read the
+ * frame back to system memory rather than hand videoconvert a D3D11 texture it
+ * cannot map, which was the black window 994401c blamed on the decoder itself.
  *
  * Recording is a tee branch off the depayloaded stream, added and removed at
  * runtime, so what lands on disk is the phone's own bitstream — no decode, no
@@ -594,9 +597,9 @@ on_bus_message (GstBus *bus, GstMessage *msg, gpointer data)
  *
  * What turning the guess off gives up is the trailing packet of a frame: a hole
  * at a frame boundary is now only noticed when the next frame arrives, about
- * 33 ms later at 30 fps. The same log measures the round trip from request to
- * retransmission at about 120 ms against a 200 ms buffer, so that packet still
- * comes back with room to spare. */
+ * 17 ms later at the 60 fps the sender is now allowed. The same log measures
+ * the round trip from request to retransmission at about 120 ms against a
+ * 200 ms buffer, so that packet still comes back with room to spare. */
 static void
 on_new_jitterbuffer (GstElement *rtpbin, GstElement *jitterbuffer,
                      guint session, guint ssrc, App *self)
@@ -905,14 +908,16 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
 
   const gchar *head = NULL;
   const gchar *mux = NULL;
-  /* An explicit software decoder per codec, not decodebin. Two reasons, both
-   * seen the hard way: on Windows decodebin autoplugs d3d11h264dec, whose
-   * D3D11-memory output the plain videoconvert downstream cannot accept — a
-   * decoder that plugs and a sink that stays black; and decodebin will not plug
-   * anything at all until typefind has seen a decodable frame, which never
-   * arrives until the keyframe request below is wired. avdec_h264 and vp8dec
-   * output system memory videoconvert always takes. avdec_h264 is the same
-   * element receiver/README.md documents. */
+  /* An explicit decoder per codec, not decodebin. Two reasons, both seen the
+   * hard way: decodebin plugged d3d11h264dec and handed the plain videoconvert
+   * downstream a D3D11 texture it cannot map, a decoder that plugs and a sink
+   * that stays black; and decodebin will not plug anything at all until typefind
+   * has seen a decodable frame, which never arrives until the keyframe request
+   * below is wired. Only the first of those was ever about the decoder, and it
+   * turned out not to be: what was missing was a capsfilter telling it to read
+   * the frame back. So the hardware decoder is here again, named rather than
+   * autoplugged, with that capsfilter attached. vp8dec is unchanged; it outputs
+   * the system memory videoconvert always takes. */
   const gchar *dec = NULL;
   if (g_ascii_strcasecmp (encoding, "H264") == 0) {
     /* request-keyframe makes rtph264depay push an upstream force-key-unit,
@@ -942,13 +947,43 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
      * describe are dropped there instead. */
     head = "rtph264depay request-keyframe=true wait-for-keyframe=false "
            "! h264parse config-interval=-1";
-    /* thread-type=slice: avdec defaults to FRAME threading, which holds output
-     * back by (threads-1) frames — the largest hidden delay after the jitter
-     * buffer. Slice threading removes it. output-corrupt=false drops the one
-     * frame a loss actually damaged rather than painting macroblock garbage;
-     * the frames after it decode and keep moving, carrying the smear until the
-     * next IDR washes it out. */
-    dec = "avdec_h264 thread-type=slice output-corrupt=false";
+    /* Hardware decode where the machine has it, software everywhere else. The
+     * test is the factory's rank and not merely the factory, so
+     * GST_PLUGIN_FEATURE_RANK=d3d11h264dec:none puts avdec back for an A/B
+     * without a rebuild.
+     *
+     * The bare video/x-raw is load-bearing. d3d11h264dec's src template offers
+     * video/x-raw(memory:D3D11Memory) first and plain video/x-raw second, and
+     * caps carrying no features match system memory only, so the filter picks
+     * the second and the decoder reads the frame back instead of handing
+     * videoconvert a texture it cannot map.
+     *
+     * This buys CPU, not milliseconds, and the log says why. The sink paints
+     * every frame at its PTS plus the pipeline's 215 ms, to the millisecond,
+     * while the jitterbuffer hands the frame over a median 51 ms past that PTS.
+     * The 164 ms of clock wait in between swallows whatever the decoder costs,
+     * so neither decoder is on the critical path until that 215 ms comes down.
+     * Neither holds a frame back either: the phone sends constrained baseline
+     * and the jitterbuffer answers the latency query live, so GstH264Decoder
+     * zeroes its reorder delay and GstDxvaH264Decoder adds no output delay of
+     * its own.
+     *
+     * What does change is the damaged frame. avdec's output-corrupt=false
+     * dropped the one frame a loss had wrecked; DXVA has no equivalent, and the
+     * base class's discard-corrupted-frames waits on a flag nothing on this
+     * path ever sets, so that frame is painted with the reference surface's
+     * macroblocks in the holes until the next IDR. That is the price, and it is
+     * paid on exactly the path wait-for-keyframe=false just opened up.
+     *
+     * thread-type=slice stays on the fallback: avdec defaults to FRAME
+     * threading, which holds output back by (threads-1) frames. */
+    GstElementFactory *hwdec = gst_element_factory_find ("d3d11h264dec");
+    if (hwdec && gst_plugin_feature_get_rank (GST_PLUGIN_FEATURE (hwdec)) > GST_RANK_NONE)
+      dec = "d3d11h264dec ! video/x-raw";
+    else
+      dec = "avdec_h264 thread-type=slice output-corrupt=false";
+    if (hwdec)
+      gst_object_unref (hwdec);
     mux = "h264parse ! matroskamux";
   } else if (g_ascii_strcasecmp (encoding, "VP8") == 0) {
     head = "rtpvp8depay";
@@ -961,10 +996,37 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
   }
   gst_caps_unref (caps);
 
+  /* processing-deadline=0 because the 15 ms every GstVideoSink starts with is
+   * not slack, it is delay. gst_video_sink_init hands its subclasses 15 ms
+   * (gstvideosink.c:175-176 in the 1.28.7 this bundle ships, over GstBaseSink's
+   * own 20 at gstbasesink.c:309), and gst_base_sink_query_latency adds that to
+   * whatever upstream reported whenever the sink syncs to the clock: "min +=
+   * processing_deadline" at gstbasesink.c:1246, reached only through "l =
+   * sink->sync" at :1214. The pipeline adopts the sum and tells every element,
+   * and the log says so in two lines: the jitterbuffer answers "Our latency:
+   * 0:00:00.200000000" and is then told "configuring latency of
+   * 0:00:00.215000000" (gstrtpjitterbuffer.c:2065). Those 15 ms are the whole
+   * difference between the two, and the sink adds the 215 to each buffer's
+   * running time before it waits on the clock, so all the deadline does here is
+   * make every frame due 15 ms later. It is meant to cover the time a sink needs
+   * to get a frame onto the glass, and this one needs none of it:
+   * gtk4paintablesink's render hands the frame to the GTK main loop and returns,
+   * and GTK paints on its own frame clock whether we waited or not. Nothing
+   * upstream loses a window for it either: the jitterbuffer's own 200 ms is its
+   * "latency" property, and the only use it has for the latency event is
+   * stretching its delay in buffer mode (gstrtpjitterbuffer.c:2072), which is
+   * not the slave mode rtpbin defaults to and webrtcbin leaves alone. What it
+   * costs is the frames that arrive inside the 15 ms being given back: over 28
+   * minutes of receiver8.gst.log, 49,427 frames, five had their last packet in
+   * later than pts + 200 ms and three of those were already late against
+   * pts + 215. The worst was in at pts + 227, still inside the drop test, which
+   * only discards a frame past its deadline plus its own duration plus
+   * max-lateness (gstbasesink.c:3127), some 38 ms further out. So a couple of
+   * frames per half hour paint late instead of on the beat, and none vanish. */
   gchar *desc = g_strdup_printf (
       "%s ! tee name=t allow-not-linked=true "
       "t. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 ! %s ! videoconvert ! "
-      "gtk4paintablesink name=vsink", head, dec);
+      "gtk4paintablesink name=vsink processing-deadline=0", head, dec);
   GError *error = NULL;
   GstElement *tail = gst_parse_bin_from_description (desc, TRUE, &error);
   g_free (desc);
@@ -1326,11 +1388,25 @@ shutdown_app (GtkApplication *app, gpointer user_data)
 int
 main (int argc, char *argv[])
 {
-  /* The jitter buffer is the single largest term in glass-to-glass delay on a
-   * relayed pair, so it is the first place to look for latency — but 120 ms
-   * was below the floor: a measured round trip of ~100 ms to the relay left no
-   * room for a retransmission to arrive, and the picture stuttered. 200 holds
-   * one. --latency walks it either way. */
+  /* The jitter buffer's latency is the single largest term in glass-to-glass
+   * delay on a relayed pair, and it is not a buffer: rtpjitterbuffer pushes an
+   * in-order packet the moment it arrives. The number is a deadline in two
+   * places at once. It is when a missing packet is finally called lost, and it
+   * is what the sink adds to every frame's presentation time before it waits on
+   * the clock, so it is real delay and it comes off one-for-one.
+   *
+   * 200 is the knee of a measured curve, not slack above it. Over one run the
+   * gap between a retransmission being asked for and arriving was 142 ms at the
+   * median, 190 at p90 and 217 at p99 — the relay round trip is 43 ms to the
+   * notebook and 52 ms to the tablet before anything else. At 200 ms, 9 of 234
+   * loss bursts missed the deadline, one smeared frame every 82 seconds; at 160
+   * it is one every 20 seconds, and at 150 one every 10. That buys 40 or 50 ms
+   * off a budget of three or four hundred, which nobody sees, and pays for it
+   * in the exact sharpness that was just fixed.
+   *
+   * --latency still walks it either way, and it is worth re-walking: the run
+   * that made 120 ms stutter predates every fix since. Below about 120 the
+   * frames themselves start arriving past their own render time. */
   App self = { .latency_ms = 200 };
 
   /* First statement in main(): before gst_init() runs inside the option parse,
@@ -1345,7 +1421,7 @@ main (int argc, char *argv[])
     { "record-dir", 'r', 0, G_OPTION_ARG_FILENAME, &self.record_dir,
         "Where the record button writes .mkv files (default: home)", "DIR" },
     { "latency", 'l', 0, G_OPTION_ARG_INT, &self.latency_ms,
-        "Jitter buffer in ms (default 120, the first knob to tune)", "MS" },
+        "Jitter buffer in ms (default 200, the first knob to tune)", "MS" },
     { "insecure", 0, 0, G_OPTION_ARG_NONE, &self.insecure,
         "Allow a plaintext ws:// signalling URL. LAN bring-up only", NULL },
     { "selftest", 0, 0, G_OPTION_ARG_NONE, &self.selftest,

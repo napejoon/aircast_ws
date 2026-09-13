@@ -106,9 +106,10 @@ class CastSession {
   }
 
   /// Congestion control decides the bitrate; this is only the ceiling. It has
-  /// to stay under coturn's per-allocation `max-bps` (8 Mbit/s — that option
-  /// is in *bytes*, and the relay drops what exceeds it), and the same number
-  /// is the USB path's default.
+  /// to stay under coturn's per-allocation `max-bps` (24 Mbit/s, and that option
+  /// is in *bytes*, and the relay silently drops what exceeds it within any one
+  /// wall-clock second, so the relay's ceiling has to clear a key frame's burst
+  /// and not just this average), and the same number is the USB path's default.
   Future<void> _capBitrate(RTCPeerConnection pc) async {
     for (final sender in await pc.getSenders()) {
       if (sender.track?.kind != 'video') continue;
@@ -120,10 +121,27 @@ class CastSession {
         // A floor, so the first seconds are not soft: libwebrtc's congestion
         // control starts conservative and ramps, and for a screen that reads as
         // a blurry open that slowly sharpens. 2 Mbit/s is well under the relay's
-        // 8 Mbit/s per-allocation cap and keeps text legible from the first
+        // 24 Mbit/s per-allocation cap and keeps text legible from the first
         // frame. If the path genuinely cannot hold it, GCC still drops below.
         e.minBitrate = 2000000;
-        e.maxFramerate = 30;
+        // The tablet composites on a 16.67 ms grid and this cap was throwing
+        // away every other tick. Of the 39,332 inter-frame RTP timestamp gaps
+        // in one 28-minute receiver log, 17.6% are one tick, 47% two and 17.7%
+        // three; only 45 are shorter than 12 ms and 22 and 44 ms are all but
+        // empty, so the grid is 60 Hz and not the panel's 90. The cap is the
+        // only limiter there is: flutter_webrtc hands the capturer a frame rate
+        // and discards it, naming the argument `ignoredFramerate` in
+        // OrientationAwareScreenCapturer.startCapture, so all of the decimation
+        // happens here. While the screen is moving a change waits a mean of
+        // 18.5 ms for a frame that will carry it; one tick per frame halves
+        // that to 8.3. 60 is also what libwebrtc uses when this field is left
+        // unset (kDefaultVideoMaxFramerate, media/base/media_constants.cc), so
+        // this is the cap getting out of the way rather than a new demand. It
+        // can still be taken back: getDisplayMedia builds the source with
+        // createVideoSource(true), and a screencast source sheds CPU overuse by
+        // MAINTAIN_RESOLUTION, whose only lever is the frame rate. Measure
+        // before believing it landed.
+        e.maxFramerate = 60;
       }
       await sender.setParameters(params);
     }

@@ -362,7 +362,7 @@ domain:
 coturn version:       (turnserver --version — picks the README that governs the config)
 TURN URLs:            turn:<domain>:3478   turns:<domain>:5349
 relay range:          49160-49360/udp        (must match /etc/turnserver.conf)
-abuse ceilings:       max-bps=1000000  bps-capacity=50000000  total-quota=100  user-quota=20
+abuse ceilings:       max-bps=3000000  bps-capacity=50000000  total-quota=100  user-quota=20
 shared secret:        /etc/aircast/turn.secret (0640 root:aircast) + password manager entry
                       — never pasted into a command, never in this repo
 signalling URL:       wss://<domain>:<port>/   (once deployed)
