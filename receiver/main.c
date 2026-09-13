@@ -8,8 +8,11 @@
  * Media path (docs/research/stack-options.md §2): webrtcbin's pads are
  * application/x-rtp only, so the tail is built per pad from the caps —
  *
- *   webrtcbin. ! rtph264depay ! h264parse ! tee ! queue ! decodebin ! gtk4paintablesink
+ *   webrtcbin. ! rtph264depay ! h264parse ! tee ! queue ! avdec_h264 ! videoconvert ! gtk4paintablesink
  *                                             \ ! queue ! matroskamux ! filesink   (while recording)
+ *
+ * An explicit decoder, not decodebin: on Windows decodebin autoplugs the D3D11
+ * hardware decoder, whose GPU-memory output the plain videoconvert cannot take.
  *
  * Recording is a tee branch off the depayloaded stream, added and removed at
  * runtime, so what lands on disk is the phone's own bitstream — no decode, no
@@ -774,11 +777,31 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
 
   const gchar *head = NULL;
   const gchar *mux = NULL;
+  /* An explicit software decoder per codec, not decodebin. Two reasons, both
+   * seen the hard way: on Windows decodebin autoplugs d3d11h264dec, whose
+   * D3D11-memory output the plain videoconvert downstream cannot accept — a
+   * decoder that plugs and a sink that stays black; and decodebin will not plug
+   * anything at all until typefind has seen a decodable frame, which never
+   * arrives until the keyframe request below is wired. avdec_h264 and vp8dec
+   * output system memory videoconvert always takes. avdec_h264 is the same
+   * element receiver/README.md documents. */
+  const gchar *dec = NULL;
   if (g_ascii_strcasecmp (encoding, "H264") == 0) {
-    head = "rtph264depay ! h264parse";
+    /* request-keyframe makes rtph264depay push an upstream force-key-unit,
+     * which webrtcbin turns into an RTCP PLI. libwebrtc emits a keyframe only
+     * at stream start or on a PLI, so a receiver that joins mid-stream — and
+     * every ~30s ICE reconnect — otherwise never gets an SPS/IDR: h264parse
+     * stays silent and nothing decodes, which is exactly the black window we
+     * had. wait-for-keyframe drops the leading undecodable P-frames;
+     * config-interval=-1 repeats SPS/PPS before each IDR so a re-established
+     * flow describes itself without another round trip. */
+    head = "rtph264depay request-keyframe=true wait-for-keyframe=true "
+           "! h264parse config-interval=-1";
+    dec = "avdec_h264";
     mux = "h264parse ! matroskamux";
   } else if (g_ascii_strcasecmp (encoding, "VP8") == 0) {
     head = "rtpvp8depay";
+    dec = "vp8dec";
     mux = "matroskamux";
   } else {
     post_ui (self, "The phone is sending a codec this build cannot decode", NULL);
@@ -789,8 +812,8 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
 
   gchar *desc = g_strdup_printf (
       "%s ! tee name=t allow-not-linked=true "
-      "t. ! queue max-size-time=0 max-size-bytes=0 ! decodebin ! videoconvert ! "
-      "gtk4paintablesink name=vsink", head);
+      "t. ! queue max-size-time=0 max-size-bytes=0 ! %s ! videoconvert ! "
+      "gtk4paintablesink name=vsink", head, dec);
   GError *error = NULL;
   GstElement *tail = gst_parse_bin_from_description (desc, TRUE, &error);
   g_free (desc);
