@@ -21,10 +21,26 @@ class CastSession {
   /// 6 Mbit/s, the 1080p ceiling from #8.
   static const maxBitrateBps = 6000000;
 
-  /// `--dart-define=AIRCAST_RELAY=false` drops the relay-only rule so a phone
-  /// and a desktop on one LAN can talk without a TURN server in the middle.
-  /// Testing aid: it leaks both addresses to the other peer.
-  static const relayOnly = bool.fromEnvironment('AIRCAST_RELAY', defaultValue: true);
+  /// Direct first, relay when direct cannot be had, matching the receiver's
+  /// own default. This was relay-only on the grounds that neither peer would
+  /// then learn the other's address, which was only ever half true: libwebrtc
+  /// does empty a relayed candidate's related address under that filter, but
+  /// libnice on the receiver has no such sanitiser and was sending this phone
+  /// the desktop's address regardless.
+  ///
+  /// What it cost was every packet crossing a relay in another country, 47 ms
+  /// of one-way path before anything else, and a retransmission crossing it
+  /// twice — which is the whole reason the receiver's jitter buffer is 200 ms.
+  /// On one Wi-Fi that structure covers a hop of a millisecond or two.
+  ///
+  /// ICE still gathers the relay candidates and still uses them on a network
+  /// that blocks peer-to-peer traffic, which is the one this was built for;
+  /// a host pair simply outranks a relay pair when both work.
+  ///
+  /// `--dart-define=AIRCAST_RELAY=true` puts relay-only back. The receiver has
+  /// to agree (`--relay-only`): a mismatch is safe but pointless, because the
+  /// relay-only side offers no host candidate for the other's to pair with.
+  static const relayOnly = bool.fromEnvironment('AIRCAST_RELAY', defaultValue: false);
 
   RTCPeerConnection? _pc;
   MediaStream? _stream;

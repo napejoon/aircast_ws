@@ -153,7 +153,7 @@ insists on the flag rather than guessing.
 | `--record-dir` | where the record button writes `aircast-<timestamp>.mkv` (default: home) |
 | `--latency` | jitter buffer in ms, default 200; first knob against the 200-500 ms budget |
 | `--insecure` | allow a plaintext `ws://` signalling URL; `wss://` is required otherwise |
-| `--no-relay` | allow direct ICE, for LAN bring-up only — both peers then learn each other's address |
+| `--relay-only` | force every packet through the TURN relay. Slower; the sender needs `AIRCAST_RELAY=true` to match |
 
 Test it without a phone:
 

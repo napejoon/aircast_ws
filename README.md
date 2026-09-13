@@ -31,8 +31,10 @@ no third-party media service in the path.
 
 ## The decisions that shape everything else
 
-- **WebRTC, relayed through our own coturn.** Only WebRTC ships congestion
-  control, and forcing `relay` means neither peer learns the other's address.
+- **WebRTC, with our own coturn behind it.** Only WebRTC ships congestion
+  control. ICE takes the direct path when the two devices can reach each other
+  and falls back to the relay when they cannot, which is what makes it usable
+  on a network that blocks everything but 443.
 - **H.264 preferred, VP8 mandatory.** libwebrtc's Android AAR is built without
   software H.264, so a MediaTek or Unisoc phone has no H.264 encoder at all —
   VP8 is what keeps it from sending a black screen.
@@ -64,22 +66,30 @@ flutter run --dart-define=AIRCAST_SIGNAL=ws://<host>:8443/ws
 
 ## LAN bring-up
 
-Relay-only ICE is the product's privacy promise and the default on both sides.
-Getting a phone and a desktop talking for the first time is easier without a
-TURN server in the middle, so both ends take an explicit opt-out — and both say
-so when it is on:
+ICE tries a direct path first on both sides, so a phone and a desktop on one
+Wi-Fi talk to each other and never touch a TURN server. That is also the
+fastest the product gets: a relay in another country is about 47 ms of one-way
+path, and the receiver's 200 ms jitter buffer is sized for a retransmission
+crossing it twice.
+
+The two peers do see each other's addresses when they take that path. Passing
+`--relay-only` to the receiver and `AIRCAST_RELAY=true` to the sender forces
+everything through the relay instead; both ends have to agree, or the one that
+still offers host candidates simply finds nothing to pair with.
 
 ```bash
 # the signalling server has to be reachable from the phone, not just loopback
 AIRCAST_BIND=0.0.0.0 AIRCAST_TURN_SECRET=dev AIRCAST_TURN_URLS=turn:127.0.0.1:3478 python server/aircast_signal.py
 
-./receiver/build/aircast-receiver --signal ws://<desktop-lan-ip>:8443 --no-relay --insecure
+./receiver/build/aircast-receiver --signal ws://<desktop-lan-ip>:8443 --insecure
 
-flutter run --dart-define=AIRCAST_SIGNAL=ws://<desktop-lan-ip>:8443 --dart-define=AIRCAST_RELAY=false
+flutter run --dart-define=AIRCAST_SIGNAL=ws://<desktop-lan-ip>:8443
 ```
 
-With the flags off — which is what ships — the two peers only ever see the
-relay's address.
+A relayed session is not anonymous either, for the record: libnice writes this
+machine's own address into the related-address field of every relayed candidate
+it offers, and has no sanitiser for it. libwebrtc on the phone does scrub its
+half. Relay-only buys a slower path and one direction of concealment, not two.
 
 ## Testing without a phone
 
@@ -119,7 +129,8 @@ Each step exists to fail on its own, rather than three at once:
    does this, so the first surprise here is a local-environment surprise.
 2. **`tools/fake_sender.py` into that receiver.** First time GStreamer decodes
    anything. No phone, no TURN, no Android.
-3. **A real Android phone on the same LAN** (`--no-relay` both ends). Proves
+3. **A real Android phone on the same LAN.** No TURN server needed: ICE
+   finds the direct pair. Proves
    four things at once, which is why it comes after step 2: MediaProjection
    consent, the foreground service, flutter_webrtc 1.6 at runtime, and
    libwebrtc talking to `webrtcbin`.
@@ -129,9 +140,10 @@ Each step exists to fail on its own, rather than three at once:
    `.mkv` opens and the tail is not truncated.
 5. **The USB path.** `adb forward`, then `gst-launch`. Independent of everything
    above — if the network path is stuck, this one can still be made to work.
-6. **Then buy the VPS**, follow `docs/ops/provision-vps.md`, drop the
-   `--no-relay` flags and repeat step 3 across the internet. Buying it earlier
-   only adds a relay to whatever is already broken.
+6. **Then buy the VPS**, follow `docs/ops/provision-vps.md`, and repeat step 3
+   with the two devices on different networks, where the direct pair fails and
+   the relay is the only thing left. Buying it earlier only adds a relay to
+   whatever is already broken.
 7. **iOS last**, because it needs a Mac, an Apple Developer account and a manual
    Xcode step (`sender/ios/README.md`) — and because Apple has deprecated every
    ReplayKit capture entry point as of iOS 27, so it is the part with a known

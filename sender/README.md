@@ -45,11 +45,14 @@ at a different relay means building another APK. The Actions tab has a
 **Sender APK (bring-up)** workflow that takes them as inputs:
 
 - `AIRCAST_SIGNAL` — where the signalling server is. The committed default is
-  `wss://localhost:8443/ws`, which on a tablet means the tablet.
-- `AIRCAST_RELAY` — `false` drops the relay-only ICE rule, which is what a LAN
-  with no coturn needs. It is `true` everywhere else, and deliberately: every
-  frame going through our own TURN is what keeps the two peers from learning
-  each other's addresses.
+  `wss://aircast.cloud/ws`, the deployed relay.
+- `AIRCAST_RELAY` — `true` forces every packet through the TURN relay. The
+  default is `false`, which lets ICE take the direct pair when the two devices
+  can reach each other and fall back to the relay when they cannot. Forcing it
+  costs a round trip through another country and conceals this device's address
+  from the receiver, but not the receiver's from this one: libnice has no
+  sanitiser for the related-address field. The receiver needs `--relay-only` to
+  match, or it will offer host candidates this side will not pair with.
 
 It produces a debug APK, because a release build is unsigned by design and
 Android will not install it.

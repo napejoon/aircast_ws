@@ -50,7 +50,7 @@ typedef struct {
   gchar *code;
   gchar *record_dir;
   guint latency_ms;
-  gboolean no_relay;
+  gboolean relay_only;
   gboolean insecure;
   gboolean selftest;
   gchar *verify_manifest;
@@ -638,7 +638,7 @@ static gboolean
 build_pipeline (App *self, JsonObject *turn)
 {
   GStrv uris = turn_uris (turn);
-  if (!uris && !self->no_relay) {
+  if (!uris && self->relay_only) {
     set_status (self, "The server sent no usable TURN URL");
     return FALSE;
   }
@@ -657,11 +657,37 @@ build_pipeline (App *self, JsonObject *turn)
 
   g_object_set (self->webrtc,
       "bundle-policy", GST_WEBRTC_BUNDLE_POLICY_MAX_BUNDLE,
-      /* Relay-only, matching the sender: the phone never learns our address.
-       * --no-relay drops that for LAN bring-up, and says so out loud. */
-      "ice-transport-policy", self->no_relay
-          ? GST_WEBRTC_ICE_TRANSPORT_POLICY_ALL
-          : GST_WEBRTC_ICE_TRANSPORT_POLICY_RELAY,
+      /* Direct first, relay when direct cannot be had. This was relay-only for
+       * a long time, on the stated grounds that neither peer would learn the
+       * other's address, and that turned out to be half true and expensive.
+       *
+       * Half true: libnice puts the local socket address in every relayed
+       * candidate's raddr field (discovery.c sets base_addr from the socket it
+       * allocated through, and _generate_candidate_sdp writes raddr whenever it
+       * differs from the candidate address) and has no sanitiser. libwebrtc
+       * does have one and empties that field under a relay-only filter. So the
+       * phone was already being told this machine's address, and only the
+       * phone's half of the promise was ever kept.
+       *
+       * Expensive: everything went through a relay in another country, which
+       * is 47 ms of one-way path on its own, and a retransmission crossing it
+       * twice is what the 200 ms jitter buffer is sized for. On one Wi-Fi that
+       * whole structure covers a hop of a millisecond or two.
+       *
+       * ICE picks the fast path by itself. Type preference puts a host pair
+       * orders of magnitude above a relay pair in both stacks, the relay
+       * candidates are still gathered and still win on a network that blocks
+       * peer-to-peer traffic, and neither trickle gathering nor the first
+       * connection gets slower for having more candidates to try.
+       *
+       * --relay-only puts the old behaviour back for anyone who would rather
+       * the other end saw nothing but the relay. The sender has to agree:
+       * --dart-define=AIRCAST_RELAY=true is its half, and a mismatch is safe
+       * but pointless, since the relay-only side offers no host candidate to
+       * pair with and the session falls back to the relay either way. */
+      "ice-transport-policy", self->relay_only
+          ? GST_WEBRTC_ICE_TRANSPORT_POLICY_RELAY
+          : GST_WEBRTC_ICE_TRANSPORT_POLICY_ALL,
       "latency", self->latency_ms,
       NULL);
   /* The jitterbuffers are created on the fly, one per stream, and webrtcbin
@@ -1430,8 +1456,9 @@ main (int argc, char *argv[])
         "Verify an update manifest against this build's key and exit", "FILE" },
     { "verify-signature", 0, 0, G_OPTION_ARG_FILENAME, &self.verify_signature,
         "The .minisig for --verify-manifest", "FILE" },
-    { "no-relay", 0, 0, G_OPTION_ARG_NONE, &self.no_relay,
-        "Allow direct ICE. LAN testing only — both peers learn each other's address", NULL },
+    { "relay-only", 0, 0, G_OPTION_ARG_NONE, &self.relay_only,
+        "Send everything through the TURN relay, never directly. Slower, and "
+        "the sender needs AIRCAST_RELAY=true to match", NULL },
     { NULL },
   };
 
@@ -1485,9 +1512,11 @@ main (int argc, char *argv[])
     self.code = g_strdup_printf ("%06u", g_random_int_range (0, 1000000));
   }
 
-  if (self.no_relay)
-    g_printerr ("--no-relay: ICE is not restricted to the relay, so this "
-        "session's peers will see each other's addresses\n");
+  if (self.relay_only)
+    g_printerr ("--relay-only: every packet goes through the TURN relay, which "
+        "costs a round trip the two peers may not need. The sender needs "
+        "--dart-define=AIRCAST_RELAY=true or it will offer host candidates "
+        "this side will not pair with.\n");
 
   gtk_init ();
 
