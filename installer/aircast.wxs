@@ -58,7 +58,26 @@
            UpgradeCode="027C7C65-2D1E-488A-A147-552B9D981628"
            Scope="perMachine">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <!-- AllowSameVersionUpgrades, because the default bound is what left two
+         "Aircast Receiver" rows in Apps and Features. Left to itself WiX writes
+         the detect-and-remove row as "older than ProductVersion, maximum
+         excluded", and every build that is not a tag stamps 0.0.0: 0.0.0 is not
+         older than 0.0.0, so FindRelatedProducts matched nothing, nothing was
+         removed, and the new ProductCode, a fresh GUID on every build because
+         the Package above declares none, registered as a second product beside
+         the first. Two installations of a several-hundred-DLL GStreamer bundle
+         fighting over the plugin scan is the thing this file chose MSI to avoid.
+         The cost is ICE61, which exists to say "same-version upgrades are
+         unusual"; it is not among the ICEs CI runs, and it is the expected
+         answer here rather than a surprise.
+
+         No Schedule attribute: the default afterInstallValidate removes the old
+         product before the new files are laid down, and that is what makes a
+         same-version upgrade safe. afterInstallExecute would leave MSI applying
+         file-versioning rules between two file sets carrying identical
+         versions, and it may decline to copy. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Without this the package has no UI sequence at all: double-clicking it

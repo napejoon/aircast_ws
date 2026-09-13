@@ -531,11 +531,10 @@ on_connection_state (GstElement *webrtc, GParamSpec *pspec, App *self)
  * costs a frame and the decoder then sits until the next keyframe, which is
  * exactly the stutter, and the freeze behind it.
  *
- * webrtcbin takes do-retransmission from the negotiated generic NACK, and
- * this sender's caps carry only nack-pli and ccm-fir. Turn it on anyway: the
- * value of it here is that the buffer waits out a reorder before calling it a
- * loss. The retransmission request it also sends is a bonus, honoured by a
- * sender that did negotiate NACK and ignored by one that did not.
+ * webrtcbin takes do-retransmission from the transceiver's do-nack, which the
+ * handler below now turns on, so this is belt as well as braces. Keep it: what
+ * it buys here is that the buffer waits out a reorder before calling it a loss,
+ * and it stays right for a sender that offers no NACK at all.
  *
  * This handler runs after webrtcbin's own, so this is the value that sticks. */
 static void
@@ -543,6 +542,30 @@ on_new_jitterbuffer (GstElement *rtpbin, GstElement *jitterbuffer,
                      guint session, guint ssrc, App *self)
 {
   g_object_set (jitterbuffer, "do-retransmission", TRUE, NULL);
+}
+
+/* The phone is not the one withholding generic NACK. libwebrtc puts nack, nack
+ * pli, ccm fir and transport-cc on every video codec it offers, and the codec
+ * reordering the Flutter app does cannot take any of them away: it hands back
+ * the codec it found in its own supported list, feedback and all. This side
+ * throws it away. A transceiver webrtcbin invents for a remote m= section is
+ * born with do-nack FALSE, and answering with that deletes the rtcp-fb-nack
+ * field from the answer caps and skips the RTX payload type. So the answer says
+ * no retransmission, thank you; the phone believes us and tears down the RTX
+ * stream its own offer set up, the a=ssrc-group:FID that is plainly there in
+ * the offer, and the 1,469 packets that genuinely went missing were never going
+ * to come back, whatever the jitterbuffer above had been told to do. It is also
+ * why the negotiated caps read nack-pli and ccm-fir but never nack: we edited
+ * that line out of the answer ourselves.
+ *
+ * webrtcbin invents that transceiver while it works through the offer and emits
+ * this signal before it reads do-nack to build the answer, which is the one
+ * moment the flag still counts. */
+static void
+on_new_transceiver (GstElement *webrtc, GstWebRTCRTPTransceiver *trans,
+                    App *self)
+{
+  g_object_set (trans, "do-nack", TRUE, NULL);
 }
 
 static gboolean
@@ -604,6 +627,8 @@ build_pipeline (App *self, JsonObject *turn)
 
   gst_bin_add (GST_BIN (self->pipeline), self->webrtc);
   g_signal_connect (self->webrtc, "pad-added", G_CALLBACK (on_pad_added), self);
+  g_signal_connect (self->webrtc, "on-new-transceiver",
+      G_CALLBACK (on_new_transceiver), self);
   g_signal_connect (self->webrtc, "on-ice-candidate", G_CALLBACK (on_ice_candidate), self);
   g_signal_connect (self->webrtc, "notify::connection-state",
       G_CALLBACK (on_connection_state), self);
