@@ -569,12 +569,42 @@ on_bus_message (GstBus *bus, GstMessage *msg, gpointer data)
  * it buys here is that the buffer waits out a reorder before calling it a loss,
  * and it stays right for a sender that offers no NACK at all.
  *
- * This handler runs after webrtcbin's own, so this is the value that sticks. */
+ * This handler runs after webrtcbin's own, so this is the value that sticks.
+ *
+ * rtx-next-seqnum is the one retransmission default that is wrong for a
+ * mirrored screen. With it on, every arriving packet arms a retransmission
+ * request for the packet the buffer estimates comes next, one packet spacing
+ * later. A camera always sends that packet. A tablet whose screen has stopped
+ * moving does not, so the request goes out for a packet that was never encoded.
+ * In the last log some 2,300 requests, nine percent of every request the buffer
+ * made, were for one past the highest sequence number received. Five of the
+ * thirteen still-screen pauses hold exactly one, fired 38 to 68 ms after the
+ * last real packet, and each of those timed out about 180 ms later into a
+ * "Packet lost" event for a packet the phone had never sent.
+ *
+ * A lost event makes the buffer mark the next one discont, and rtph264depay
+ * with request-keyframe=true answers a discont with a force-key-unit, so a
+ * screen going still ends up ordering a full 2304x1440 keyframe that the phone
+ * can only encode once the screen moves again. It then lands inside the burst
+ * the movement itself produces, and that burst is where the loss already is:
+ * the 10,508 lost packets of that log arrive in 307 runs averaging 34
+ * consecutive packets, each run behind a peak of 650 to 830 packets a second,
+ * which is the 6 Mbit ceiling the sender is set to. Guessing at a packet the
+ * phone never sent is how a still screen gets charged for that burst twice.
+ *
+ * What turning the guess off gives up is the trailing packet of a frame: a hole
+ * at a frame boundary is now only noticed when the next frame arrives, about
+ * 33 ms later at 30 fps. The same log measures the round trip from request to
+ * retransmission at about 120 ms against a 200 ms buffer, so that packet still
+ * comes back with room to spare. */
 static void
 on_new_jitterbuffer (GstElement *rtpbin, GstElement *jitterbuffer,
                      guint session, guint ssrc, App *self)
 {
-  g_object_set (jitterbuffer, "do-retransmission", TRUE, NULL);
+  g_object_set (jitterbuffer,
+      "do-retransmission", TRUE,
+      "rtx-next-seqnum", FALSE,
+      NULL);
 }
 
 /* The phone is not the one withholding generic NACK. libwebrtc puts nack, nack
@@ -890,16 +920,34 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
      * at stream start or on a PLI, so a receiver that joins mid-stream — and
      * every ~30s ICE reconnect — otherwise never gets an SPS/IDR: h264parse
      * stays silent and nothing decodes, which is exactly the black window we
-     * had. wait-for-keyframe drops the leading undecodable P-frames;
-     * config-interval=-1 repeats SPS/PPS before each IDR so a re-established
-     * flow describes itself without another round trip. */
-    head = "rtph264depay request-keyframe=true wait-for-keyframe=true "
+     * had. config-interval=-1 repeats SPS/PPS before each IDR so a
+     * re-established flow describes itself without another round trip.
+     *
+     * wait-for-keyframe is off because it was the stutter. The jitterbuffer
+     * marks the first buffer after a loss DISCONT; on a DISCONT the depayloader
+     * empties its adapter and bins every access unit it finishes until an
+     * SPS/PPS/IDR arrives whole. That left the picture frozen for 52 of 333
+     * seconds on one run, a median of 0.9 s and once 7.3 s against a 52 ms
+     * round trip, because the quarter-megabyte IDR each PLI asks for is dropped
+     * by the relay as readily as the frame that started it, so the wait renews
+     * itself. Over those freezes the jitterbuffer still handed out some 1,250
+     * finished frames that never reached the screen, and roughly seven in ten
+     * of them had not lost a packet: counted from the jitterbuffer's own output
+     * inside the freeze windows, because the depayloader logs its drops only at
+     * GST_LOG. avdec_h264 never logged a line all session, because it never saw
+     * any of it. The black window does not come back: the PLI hangs off
+     * request-keyframe alone, pushed from that same DISCONT path, and the first
+     * buffer out of a fresh jitterbuffer is always DISCONT. Nothing here is
+     * decodebin any more either, so the leading P-frames h264parse cannot
+     * describe are dropped there instead. */
+    head = "rtph264depay request-keyframe=true wait-for-keyframe=false "
            "! h264parse config-interval=-1";
     /* thread-type=slice: avdec defaults to FRAME threading, which holds output
      * back by (threads-1) frames — the largest hidden delay after the jitter
-     * buffer. Slice threading removes it. output-corrupt=false drops a frame
-     * damaged by loss rather than painting macroblock garbage, which pairs with
-     * wait-for-keyframe: the picture stays clean and snaps back at the next IDR. */
+     * buffer. Slice threading removes it. output-corrupt=false drops the one
+     * frame a loss actually damaged rather than painting macroblock garbage;
+     * the frames after it decode and keep moving, carrying the smear until the
+     * next IDR washes it out. */
     dec = "avdec_h264 thread-type=slice output-corrupt=false";
     mux = "h264parse ! matroskamux";
   } else if (g_ascii_strcasecmp (encoding, "VP8") == 0) {
