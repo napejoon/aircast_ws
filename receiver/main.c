@@ -8,8 +8,11 @@
  * Media path (docs/research/stack-options.md §2): webrtcbin's pads are
  * application/x-rtp only, so the tail is built per pad from the caps —
  *
- *   webrtcbin. ! rtph264depay ! h264parse ! tee ! queue ! decodebin ! gtk4paintablesink
+ *   webrtcbin. ! rtph264depay ! h264parse ! tee ! queue ! avdec_h264 ! videoconvert ! gtk4paintablesink
  *                                             \ ! queue ! matroskamux ! filesink   (while recording)
+ *
+ * An explicit decoder, not decodebin: on Windows decodebin autoplugs the D3D11
+ * hardware decoder, whose GPU-memory output the plain videoconvert cannot take.
  *
  * Recording is a tee branch off the depayloaded stream, added and removed at
  * runtime, so what lands on disk is the phone's own bitstream — no decode, no
@@ -724,20 +727,31 @@ on_connected (GObject *session, GAsyncResult *result, gpointer user_data)
 
 typedef struct {
   App *self;
-  GdkPaintable *paintable;
+  GstElement *sink;
 } PaintableHandover;
 
+/* Runs on the main thread (g_idle_add), which is the only place gtk4paintablesink
+ * will hand out its paintable — the "paintable" property getter errors on any
+ * other thread, and on_pad_added runs on a streaming one. Fetching it here
+ * rather than there is the difference between a live picture and a blank one. */
 static gboolean
 attach_paintable (gpointer data)
 {
   PaintableHandover *handover = data;
   App *self = handover->self;
+  GdkPaintable *paintable = NULL;
 
-  gtk_picture_set_paintable (GTK_PICTURE (self->picture), handover->paintable);
-  show_page (self, "live");
-  wake_toolbar (self);
+  g_object_get (handover->sink, "paintable", &paintable, NULL);
+  if (paintable) {
+    gtk_picture_set_paintable (GTK_PICTURE (self->picture), paintable);
+    g_object_unref (paintable);
+    show_page (self, "live");
+    wake_toolbar (self);
+  } else {
+    set_status (self, "The video sink produced no paintable");
+  }
 
-  g_object_unref (handover->paintable);
+  gst_object_unref (handover->sink);
   g_free (handover);
   return G_SOURCE_REMOVE;
 }
@@ -763,11 +777,36 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
 
   const gchar *head = NULL;
   const gchar *mux = NULL;
+  /* An explicit software decoder per codec, not decodebin. Two reasons, both
+   * seen the hard way: on Windows decodebin autoplugs d3d11h264dec, whose
+   * D3D11-memory output the plain videoconvert downstream cannot accept — a
+   * decoder that plugs and a sink that stays black; and decodebin will not plug
+   * anything at all until typefind has seen a decodable frame, which never
+   * arrives until the keyframe request below is wired. avdec_h264 and vp8dec
+   * output system memory videoconvert always takes. avdec_h264 is the same
+   * element receiver/README.md documents. */
+  const gchar *dec = NULL;
   if (g_ascii_strcasecmp (encoding, "H264") == 0) {
-    head = "rtph264depay ! h264parse";
+    /* request-keyframe makes rtph264depay push an upstream force-key-unit,
+     * which webrtcbin turns into an RTCP PLI. libwebrtc emits a keyframe only
+     * at stream start or on a PLI, so a receiver that joins mid-stream — and
+     * every ~30s ICE reconnect — otherwise never gets an SPS/IDR: h264parse
+     * stays silent and nothing decodes, which is exactly the black window we
+     * had. wait-for-keyframe drops the leading undecodable P-frames;
+     * config-interval=-1 repeats SPS/PPS before each IDR so a re-established
+     * flow describes itself without another round trip. */
+    head = "rtph264depay request-keyframe=true wait-for-keyframe=true "
+           "! h264parse config-interval=-1";
+    /* thread-type=slice: avdec defaults to FRAME threading, which holds output
+     * back by (threads-1) frames — the largest hidden delay after the jitter
+     * buffer. Slice threading removes it. output-corrupt=false drops a frame
+     * damaged by loss rather than painting macroblock garbage, which pairs with
+     * wait-for-keyframe: the picture stays clean and snaps back at the next IDR. */
+    dec = "avdec_h264 thread-type=slice output-corrupt=false";
     mux = "h264parse ! matroskamux";
   } else if (g_ascii_strcasecmp (encoding, "VP8") == 0) {
     head = "rtpvp8depay";
+    dec = "vp8dec";
     mux = "matroskamux";
   } else {
     post_ui (self, "The phone is sending a codec this build cannot decode", NULL);
@@ -778,8 +817,8 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
 
   gchar *desc = g_strdup_printf (
       "%s ! tee name=t allow-not-linked=true "
-      "t. ! queue max-size-time=0 max-size-bytes=0 ! decodebin ! videoconvert ! "
-      "gtk4paintablesink name=vsink", head);
+      "t. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 ! %s ! videoconvert ! "
+      "gtk4paintablesink name=vsink", head, dec);
   GError *error = NULL;
   GstElement *tail = gst_parse_bin_from_description (desc, TRUE, &error);
   g_free (desc);
@@ -813,8 +852,7 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
 
   PaintableHandover *handover = g_new0 (PaintableHandover, 1);
   handover->self = self;
-  g_object_get (sink, "paintable", &handover->paintable, NULL);
-  gst_object_unref (sink);
+  handover->sink = sink;        /* ref transferred; attach_paintable unrefs it */
   if (tee)
     gst_object_unref (tee);
   g_idle_add (attach_paintable, handover);
@@ -1067,7 +1105,11 @@ shutdown_app (GtkApplication *app, gpointer user_data)
 int
 main (int argc, char *argv[])
 {
-  App self = { .latency_ms = 200 };
+  /* 120 ms, not 200: the jitter buffer is the single largest term in
+   * glass-to-glass delay on a relayed pair, and 120 is about the floor that
+   * still rides out RTX on a Singapore relay. --latency walks it further down
+   * until stutter appears. */
+  App self = { .latency_ms = 120 };
 
   /* First statement in main(): before gst_init() runs inside the option parse,
    * and before anything can cache a data directory. */
@@ -1081,7 +1123,7 @@ main (int argc, char *argv[])
     { "record-dir", 'r', 0, G_OPTION_ARG_FILENAME, &self.record_dir,
         "Where the record button writes .mkv files (default: home)", "DIR" },
     { "latency", 'l', 0, G_OPTION_ARG_INT, &self.latency_ms,
-        "Jitter buffer in ms (default 200, the first knob to tune)", "MS" },
+        "Jitter buffer in ms (default 120, the first knob to tune)", "MS" },
     { "insecure", 0, 0, G_OPTION_ARG_NONE, &self.insecure,
         "Allow a plaintext ws:// signalling URL. LAN bring-up only", NULL },
     { "selftest", 0, 0, G_OPTION_ARG_NONE, &self.selftest,

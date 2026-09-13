@@ -8,10 +8,13 @@ import 'session.dart';
 import 'signaling.dart';
 import 'usb.dart';
 
-/// Build-time default so the VPS can move without a code change:
-/// `flutter run --dart-define=AIRCAST_SIGNAL=wss://signal.example.com/ws`.
+/// The deployed server is compiled in, as it is in the receiver
+/// (receiver/CMakeLists.txt, AIRCAST_SIGNAL), so an APK from ci.yml — which
+/// passes no define — works out of the box. Anyone running their own server
+/// overrides it: `flutter run --dart-define=AIRCAST_SIGNAL=wss://host/ws`,
+/// or the field behind the settings button at run time.
 const _defaultSignalUrl =
-    String.fromEnvironment('AIRCAST_SIGNAL', defaultValue: 'wss://localhost:8443/ws');
+    String.fromEnvironment('AIRCAST_SIGNAL', defaultValue: 'wss://aircast.cloud/ws');
 
 /// Same palette as the receiver's window (receiver/style.css.h), so the two
 /// halves of one product look like one product.
