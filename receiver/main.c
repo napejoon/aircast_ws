@@ -33,6 +33,8 @@
 
 #ifdef G_OS_WIN32
 #include <windows.h>
+#include <shellapi.h>
+#include <objbase.h>
 #endif
 
 #include "update_check.h"
@@ -1021,6 +1023,55 @@ on_update_clicked (GtkButton *button, App *self)
   aircast_update_check_async (AIRCAST_VERSION, TRUE, on_update_checked, self);
 }
 
+/* -------------------------------------------------------- wireless display */
+
+#ifdef G_OS_WIN32
+/* The tablet's own Smart View is Miracast, and Miracast is not something this
+ * program can become: it wants Wi-Fi Direct, an RTSP handshake, HDCP and a WLAN
+ * driver willing to act as a sink, none of which webrtcbin has any part of.
+ * Windows already ships that sink and merely leaves it out of the image, so the
+ * honest offer is a door to it rather than an imitation of it.
+ * docs/research/smart-view-miracast.md has the verdict and what it costs.
+ *
+ * ShellExecuteW, and not the GtkUriLauncher the Update button uses a few lines
+ * up, because this scheme is not launched from a command line at all:
+ * HKCR\ms-settings\Shell\Open\Command holds no default value, only
+ * DelegateExecute={4ed3a719-cea8-4bd9-910d-e252f997afc2}, and the sibling
+ * Shell\Open keys name a packaged app by ActivatableClassId and PackageId.
+ * Whether GIO can follow that chain has not been tested here; the shell
+ * certainly can, and it is the component that owns the chain.
+ *
+ * COM before the call, and on this thread, because that CLSID is an in-process
+ * server (windows.system.launcher.dll, ThreadingModel Both) which the shell has
+ * to CoCreateInstance on whichever thread called it. A thread with no apartment
+ * gets CO_E_NOTINITIALIZED and a return of 32 or less, which is
+ * indistinguishable from Settings being missing and would make this button fail
+ * everywhere while blaming Windows. We release only the reference we actually
+ * took: RPC_E_CHANGED_MODE means GTK initialised the apartment first with the
+ * other model, which is fine here precisely because the handler is
+ * ThreadingModel=Both, and uninitialising then would be tearing down GTK's.
+ *
+ * Nothing here asks first whether the feature is installed. Settings is the
+ * only thing on the machine that knows without elevation, and that page already
+ * says to add the Wireless Display optional feature, with the button under it,
+ * when the answer is no. A probe of our own could only be a second opinion that
+ * disagrees with the page we are about to open, and a wrong one would hide this
+ * button on exactly the machines that need it. */
+static void
+on_wireless_display_clicked (GtkButton *button, App *self)
+{
+  HRESULT com = CoInitializeEx (NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+
+  if ((INT_PTR) ShellExecuteW (NULL, L"open", L"ms-settings:project", NULL, NULL,
+      SW_SHOWNORMAL) <= 32)
+    set_status (self, "Could not open Settings. Open it yourself: "
+        "System > Projecting to this PC.");
+
+  if (SUCCEEDED (com))
+    CoUninitialize ();
+}
+#endif
+
 static GtkWidget *
 build_idle_page (App *self)
 {
@@ -1057,6 +1108,27 @@ build_idle_page (App *self)
 
   gtk_box_append (GTK_BOX (box), self->status_label);
   gtk_box_append (GTK_BOX (box), self->update_label);
+
+#ifdef G_OS_WIN32
+  /* On the idle card and nowhere else: this is the screen someone stares at
+   * when the phone in their hand has no aircast on it, and by the time there is
+   * a live session the question has answered itself. Flat, and wearing the
+   * hint's grey rather than a style of its own, because it is the way out of
+   * this window and not the way we want anyone to cast: what it opens has no
+   * recording, no bezel, and a latency --latency cannot reach. */
+  GtkWidget *wireless =
+      gtk_button_new_with_label ("No app on the phone? Use Windows Wireless Display");
+  gtk_button_set_has_frame (GTK_BUTTON (wireless), FALSE);
+  gtk_widget_add_css_class (wireless, "hint");
+  gtk_widget_set_tooltip_text (wireless,
+      "Opens Settings > System > Projecting to this PC, where Windows' own "
+      "Miracast receiver is installed and switched on. Adding it needs an "
+      "administrator once. The picture is then Windows': aircast cannot record "
+      "it or tune its latency.");
+  g_signal_connect (wireless, "clicked", G_CALLBACK (on_wireless_display_clicked), self);
+  gtk_box_append (GTK_BOX (box), wireless);
+#endif
+
   return box;
 }
 

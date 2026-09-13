@@ -77,6 +77,41 @@ plugins from is not writable by the user.
 Releases are **not code-signed**, so Windows shows "Windows protected your PC".
 Nothing about the format avoids that; only a certificate would.
 
+## Casting with no app on the phone (Windows)
+
+The idle screen carries one extra line on Windows: **No app on the phone? Use
+Windows Wireless Display**. It opens Settings > System > Projecting to this PC
+and then gets out of the way.
+
+What it opens is not aircast. Samsung Smart View is Miracast, and Miracast is
+Wi-Fi Direct plus RTSP plus HDCP plus a WLAN driver willing to be a sink, a
+sink we are not going to write. Windows ships one, as an optional feature that
+is not in the image by default, so the button leads to the page that installs
+it and switches it on.
+
+The trade, plainly: the phone needs nothing installed, and in exchange there is
+no recording, no bezel, no pairing code, and a latency that belongs to Windows
+rather than to `--latency`.
+
+Limitations, in the order they bite:
+
+- Adding "Wireless Display" needs an administrator and a reachable Windows
+  Update. Optional features are downloaded, not unpacked from the local disk.
+- The Wi-Fi and graphics drivers both have to support it. `netsh wlan show
+  driver` answers in one line: `Wireless Display Supported: Yes (Graphics
+  Driver: Yes, Wi-Fi Driver: Yes)`. A No on either half is the end of it.
+- The PC has to be made discoverable on that same page, and its Wi-Fi radio has
+  to be on even when the machine is on Ethernet: the transport is Wi-Fi Direct,
+  not the LAN.
+- Plenty of managed and guest networks block that traffic, and block the
+  infrastructure fallback too.
+- Windows 11 Home is fine; nothing here needs Pro or a domain.
+- None of it exists on Ubuntu, which is why the button is inside
+  `#ifdef G_OS_WIN32`.
+
+`docs/research/smart-view-miracast.md` has the evidence, and the two further
+steps we chose not to build.
+
 ## Updates
 
 The app checks for a new version and, if there is one, offers a button that
