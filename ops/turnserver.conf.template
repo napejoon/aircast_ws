@@ -110,7 +110,6 @@ denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 # host's own public IP, which reaches 3478/5349 and (later) the signalling port
 # from a source that IS the server, defeating any IP-based restriction there.
 # Add the IPv6 address as a second line if one is ever configured.
-denied-peer-ip=<VPS_PUBLIC_IPV4>
 
 no-multicast-peers
 
@@ -202,3 +201,19 @@ log-file=stdout
 
 # Uncomment only while debugging; it is extremely chatty.
 #verbose
+
+# NOT denied as a peer: <VPS_PUBLIC_IPV4>, and the IPv6 relay-ip if there is one.
+# Both aircast peers are forced relay-only through this coturn, so every remote
+# candidate either side ever sees is this box's own relay address. An earlier
+# revision denied it to stop credentials relaying back into the server, and the
+# only visible symptom was "A peer IP <ip> denied in the range" six times per
+# session while both ends reported healthy allocations and ICE failed. What the
+# deny protected is limited to services bound on the public address but
+# firewalled from the internet; loopback-only services are unreachable either way.
+
+# Listen on every address DNS advertises for the TURN name. libnice — the
+# receiver's ICE — takes the first answer the resolver gives it, and with an
+# AAAA record present that is the IPv6 one: a coturn on IPv4 only is then simply
+# silent for every IPv6-capable receiver. No 401, no session, nothing to see.
+#listening-ip=<VPS_PUBLIC_IPV6>
+#relay-ip=<VPS_PUBLIC_IPV6>

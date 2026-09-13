@@ -96,10 +96,17 @@ certbot renew --dry-run
 live TURN allocation — it cuts any mirror session in flight. Decide the policy now and write it into #14:
 accept a ~90-day interruption at a known hour, or add a hook that restarts only when no allocations are active.
 
+Certbot runs every deploy hook once per renewed lineage, so a hook that
+restarts coturn unconditionally restarts it when any *other* site on the box
+renews. On the deployed server that was two unrelated websites, three times a
+quarter, each one ending every cast in flight. Match the lineage:
+
 ```bash
 cat >/etc/letsencrypt/renewal-hooks/deploy/coturn.sh <<'EOF'
 #!/bin/sh
-systemctl restart coturn
+case "$RENEWED_LINEAGE" in
+  */<TURN_DOMAIN>) systemctl restart coturn ;;
+esac
 EOF
 chmod +x /etc/letsencrypt/renewal-hooks/deploy/coturn.sh
 ```
@@ -350,6 +357,94 @@ and trusts that header only from loopback; without it every client shares one bu
 lock out everyone.
 
 Record the choice in #16, which owns deployment.
+
+## 7. 443, when the network leaves nothing else
+
+Measured on a university network with the sender's own ICE log: UDP/3478,
+UDP/443 and TLS/5349 all timed out and coturn never saw a packet, while HTTPS
+to the same host carried a 189 MB download. TCP/443 is the one port a
+captive-portal network cannot close, because its own sign-in page uses it.
+Per-port survival rates you will read elsewhere are folklore; this one is the
+only one with a reason behind it.
+
+So TURNS moves onto 443 beside the web, routed by SNI. This is the one step in
+this runbook that touches the other sites on the box, which is why it is last.
+
+**Two names are load-bearing.** nginx tells a TURNS ClientHello from an HTTPS
+one by SNI alone — libwebrtc sends no ALPN and no API sets one — so
+`turn.<DOMAIN>` and the signalling name must differ. They already do.
+
+1. **coturn listens on loopback too, and is told its relay address.** Without
+   `relay-ip`, a client that arrived via nginx is handed `127.0.0.1` as its
+   relay and both ends report a healthy allocation that carries nothing.
+   ```
+   listening-ip=127.0.0.1
+   relay-ip=<VPS_PUBLIC_IPV4>
+   ```
+   `systemctl restart coturn`, then `ss -lntp | grep 127.0.0.1:5349`.
+
+2. **Every HTTPS vhost leaves 443.** In each `server` that has `listen 443 ssl`
+   — the signalling one and every other site on the box — replace the two
+   listen lines with
+   ```
+   listen 127.0.0.1:8444 ssl proxy_protocol;
+   set_real_ip_from 127.0.0.1;
+   real_ip_header proxy_protocol;
+   ```
+   The last two are not optional: without them the code-guessing throttle
+   sees `127.0.0.1` for the whole internet and the first ten misses anywhere
+   lock everyone out.
+
+3. **Install `ops/nginx-aircast-443.stream.conf`** as
+   `/etc/nginx/stream.d/aircast-443.conf` with `<TURN_DOMAIN>` replaced. It
+   owns 443, peeks at SNI without terminating TLS, sends every upstream a
+   PROXY protocol header, and strips that header again on a loopback hop
+   before coturn — which cannot parse it. coturn's own `--tcp-proxy-port`
+   would, but turning it on disables the normal TCP and TLS listeners.
+
+4. **Before restarting, prove no http vhost still owns 443:**
+   ```
+   nginx -T | grep -cE '^\s*listen [^;]*443[^;]* ssl'    # must print 0
+   ```
+   `nginx -t` will not tell you. It merges duplicate listens *within* http and
+   never compares http against stream, so a vhost you missed passes the test
+   and then the restart fails to bind and nginx stays down. The one that was
+   missed here lived in `sites-enabled/default`, a file that looks like the
+   stock placeholder and had a certbot-managed 443 block for a third site at
+   line 144 — `grep listen` with `head` on the output is how it was missed.
+   Read the whole `nginx -T`, not the files you think are relevant.
+
+5. **Restart nginx. Not reload.** The running worker holds 443 as an *http*
+   socket and the new configuration wants it as a *stream* socket; a reload
+   logs
+   ```
+   bind() to 0.0.0.0:443 failed (98: Address already in use) … still could not bind()
+   ```
+   and quietly keeps serving the old configuration. `nginx -t` passes either
+   way and proves nothing. *Skipped:* everything looks fine, the new URL is
+   advertised, and every client on a locked-down network spends a timeout on
+   it. The proof is `ss -lntp | grep -E '127.0.0.1:(8444|8446)'` — two lines.
+
+6. **Advertise it last**, once step 5's check passes:
+   ```
+   AIRCAST_TURN_URLS=turn:<TURN_DOMAIN>:3478?transport=udp,turns:<TURN_DOMAIN>:5349?transport=tcp,turns:<TURN_DOMAIN>:443?transport=tcp
+   ```
+   UDP first: libwebrtc gathers every server concurrently and its own type
+   preference already puts relay-over-UDP above TCP above TLS, so the fast
+   path stays the fast path and the fallbacks cost a good network nothing.
+
+   No `turn:<TURN_DOMAIN>:443?transport=udp`. It reads like a free extra and it
+   is not: nginx's stream block owns 443 over TCP only, nothing on the box ever
+   binds UDP/443, and every client that is handed that URL spends a gathering
+   timeout on an address where no one is listening. It was advertised on the
+   deployed server for weeks before `ss -lun` was asked the question.
+
+**What this cannot fix:** a network that intercepts TLS. libwebrtc validates
+TURNS against its compiled-in root list, not the device store, and `dart:io`
+on Android ignores user-installed CAs. `curl -vI https://<SIGNAL_DOMAIN>/` from
+the network in question and look at the issuer: Let's Encrypt means port
+filtering, and this section is the answer; anything else means tethering to
+cellular is.
 
 ## Provisioned facts
 
