@@ -797,7 +797,12 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
      * flow describes itself without another round trip. */
     head = "rtph264depay request-keyframe=true wait-for-keyframe=true "
            "! h264parse config-interval=-1";
-    dec = "avdec_h264";
+    /* thread-type=slice: avdec defaults to FRAME threading, which holds output
+     * back by (threads-1) frames — the largest hidden delay after the jitter
+     * buffer. Slice threading removes it. output-corrupt=false drops a frame
+     * damaged by loss rather than painting macroblock garbage, which pairs with
+     * wait-for-keyframe: the picture stays clean and snaps back at the next IDR. */
+    dec = "avdec_h264 thread-type=slice output-corrupt=false";
     mux = "h264parse ! matroskamux";
   } else if (g_ascii_strcasecmp (encoding, "VP8") == 0) {
     head = "rtpvp8depay";
@@ -812,7 +817,7 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
 
   gchar *desc = g_strdup_printf (
       "%s ! tee name=t allow-not-linked=true "
-      "t. ! queue max-size-time=0 max-size-bytes=0 ! %s ! videoconvert ! "
+      "t. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 ! %s ! videoconvert ! "
       "gtk4paintablesink name=vsink", head, dec);
   GError *error = NULL;
   GstElement *tail = gst_parse_bin_from_description (desc, TRUE, &error);
@@ -1100,7 +1105,11 @@ shutdown_app (GtkApplication *app, gpointer user_data)
 int
 main (int argc, char *argv[])
 {
-  App self = { .latency_ms = 200 };
+  /* 120 ms, not 200: the jitter buffer is the single largest term in
+   * glass-to-glass delay on a relayed pair, and 120 is about the floor that
+   * still rides out RTX on a Singapore relay. --latency walks it further down
+   * until stutter appears. */
+  App self = { .latency_ms = 120 };
 
   /* First statement in main(): before gst_init() runs inside the option parse,
    * and before anything can cache a data directory. */
@@ -1114,7 +1123,7 @@ main (int argc, char *argv[])
     { "record-dir", 'r', 0, G_OPTION_ARG_FILENAME, &self.record_dir,
         "Where the record button writes .mkv files (default: home)", "DIR" },
     { "latency", 'l', 0, G_OPTION_ARG_INT, &self.latency_ms,
-        "Jitter buffer in ms (default 200, the first knob to tune)", "MS" },
+        "Jitter buffer in ms (default 120, the first knob to tune)", "MS" },
     { "insecure", 0, 0, G_OPTION_ARG_NONE, &self.insecure,
         "Allow a plaintext ws:// signalling URL. LAN bring-up only", NULL },
     { "selftest", 0, 0, G_OPTION_ARG_NONE, &self.selftest,

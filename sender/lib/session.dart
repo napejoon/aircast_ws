@@ -117,6 +117,12 @@ class CastSession {
       if (encodings == null || encodings.isEmpty) continue;
       for (final e in encodings) {
         e.maxBitrate = maxBitrateBps;
+        // A floor, so the first seconds are not soft: libwebrtc's congestion
+        // control starts conservative and ramps, and for a screen that reads as
+        // a blurry open that slowly sharpens. 2 Mbit/s is well under the relay's
+        // 8 Mbit/s per-allocation cap and keeps text legible from the first
+        // frame. If the path genuinely cannot hold it, GCC still drops below.
+        e.minBitrate = 2000000;
         e.maxFramerate = 30;
       }
       await sender.setParameters(params);
