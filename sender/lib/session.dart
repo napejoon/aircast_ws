@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'signaling.dart';
@@ -53,7 +54,9 @@ class CastSession {
       if (!await Helper.requestCapturePermission()) {
         throw Exception('Screen sharing was declined');
       }
+      debugPrint('aircast: consent granted');
       await UsbCast.holdForeground();
+      debugPrint('aircast: foreground service up');
     }
 
     // iOS: 'broadcast' selects the Broadcast Upload Extension, which is the
@@ -65,8 +68,10 @@ class CastSession {
       'audio': false,
     });
 
+    debugPrint('aircast: capture started, ${_stream!.getVideoTracks().length} video track(s)');
     final pc = await createPeerConnection(turn.toConfiguration(relayOnly: relayOnly));
     _pc = pc;
+    debugPrint('aircast: peer connection created');
 
     for (final track in _stream!.getVideoTracks()) {
       await pc.addTrack(track, _stream!);

@@ -108,7 +108,12 @@ class _SenderPageState extends State<SenderPage> {
       setState(() => _status = 'Waiting for the desktop…');
       await session.start();
       setState(() => _status = 'Negotiating…');
-    } on Object catch (e) {
+    } on Object catch (e, st) {
+      // Into logcat as well as onto the screen: a status line the user does not
+      // read is a failure nobody can diagnose, and three of these were found by
+      // adb, not by eye.
+      debugPrint('aircast: session failed: $e');
+      debugPrint('$st');
       await _stop(status: '$e');
     }
   }

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.view.WindowManager
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
@@ -63,13 +64,39 @@ class UsbCastPlugin(
             // foreground when this runs, but the five-second window it opens is
             // what makes the ordering guarantee rather than a race.
             "holdForeground" -> {
+                // Answer when the service has actually called startForeground,
+                // not when it has merely been asked to: startForegroundService()
+                // returns before onStartCommand runs, and the first bring-up hit
+                // exactly that gap — getDisplayMedia raced the service and died
+                // with the SecurityException the service exists to prevent.
+                val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                var answered = false
+                val timeout = Runnable {
+                    if (!answered) {
+                        answered = true
+                        UsbCastService.onForeground = null
+                        result.error("foreground", "the cast service did not reach the foreground in 5 s", null)
+                    }
+                }
+                UsbCastService.onForeground = {
+                    if (!answered) {
+                        answered = true
+                        handler.removeCallbacks(timeout)
+                        result.success(null)
+                    }
+                }
+                handler.postDelayed(timeout, 5_000)
+                // Android stops a MediaProjection the moment the screen locks, and a
+                // tablet left alone locks in under a minute. Casting is the one
+                // activity where a screen that stays on is the point.
+                activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 activity.startForegroundService(
                     Intent(activity, UsbCastService::class.java).setAction(UsbCastService.ACTION_HOLD)
                 )
-                result.success(null)
             }
 
             "stop" -> {
+                activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 activity.startService(
                     Intent(activity, UsbCastService::class.java).setAction(UsbCastService.ACTION_STOP)
                 )
