@@ -547,9 +547,7 @@ on_bus_message (GstBus *bus, GstMessage *msg, gpointer data)
     gchar *text = g_strdup_printf ("%s failed: %s",
         src ? GST_OBJECT_NAME (src) : "The pipeline", err->message);
     post_ui (self, text, NULL);
-    g_printerr ("%s
-%s
-", text, debug ? debug : "");
+    g_printerr ("%s\n%s\n", text, debug ? debug : "");
     g_free (text);
     g_free (debug);
     g_error_free (err);
