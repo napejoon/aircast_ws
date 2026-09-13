@@ -522,6 +522,29 @@ on_connection_state (GstElement *webrtc, GParamSpec *pspec, App *self)
     post_ui (self, "The connection failed — is the TURN relay reachable?", "idle");
 }
 
+/* A mirrored screen arriving over a relay is heavily reordered: on one run
+ * 8,234 of 18,065 packets came in behind a higher sequence number, and every
+ * one of them was less than 20 ms late. rtpjitterbuffer drops a packet it has
+ * already declared lost, and with retransmission off it declares one the
+ * instant a gap appears instead of waiting — that run logged "Clearing gap
+ * packets" on every single packet and threw 9,703 arrivals away. Each hole
+ * costs a frame and the decoder then sits until the next keyframe, which is
+ * exactly the stutter, and the freeze behind it.
+ *
+ * webrtcbin takes do-retransmission from the negotiated generic NACK, and
+ * this sender's caps carry only nack-pli and ccm-fir. Turn it on anyway: the
+ * value of it here is that the buffer waits out a reorder before calling it a
+ * loss. The retransmission request it also sends is a bonus, honoured by a
+ * sender that did negotiate NACK and ignored by one that did not.
+ *
+ * This handler runs after webrtcbin's own, so this is the value that sticks. */
+static void
+on_new_jitterbuffer (GstElement *rtpbin, GstElement *jitterbuffer,
+                     guint session, guint ssrc, App *self)
+{
+  g_object_set (jitterbuffer, "do-retransmission", TRUE, NULL);
+}
+
 static gboolean
 build_pipeline (App *self, JsonObject *turn)
 {
@@ -548,6 +571,19 @@ build_pipeline (App *self, JsonObject *turn)
           : GST_WEBRTC_ICE_TRANSPORT_POLICY_RELAY,
       "latency", self->latency_ms,
       NULL);
+  /* The jitterbuffers are created on the fly, one per stream, and webrtcbin
+   * exposes no property for them — its rtpbin child and this signal are the
+   * only way in. */
+  GstElement *rtpbin = gst_bin_get_by_name (GST_BIN (self->webrtc), "rtpbin");
+  if (rtpbin) {
+    g_signal_connect (rtpbin, "new-jitterbuffer",
+        G_CALLBACK (on_new_jitterbuffer), self);
+    gst_object_unref (rtpbin);
+  } else {
+    g_warning ("webrtcbin has no rtpbin child: a reordered packet will be "
+               "dropped as lost, and the picture will stutter");
+  }
+
   /* add-turn-server rather than the turn-server property, so the UDP entry and
    * the TCP/TLS ones are all offered and ICE picks whichever the network
    * permits. It returns FALSE for a URI it could not parse; one bad entry is
@@ -1105,11 +1141,12 @@ shutdown_app (GtkApplication *app, gpointer user_data)
 int
 main (int argc, char *argv[])
 {
-  /* 120 ms, not 200: the jitter buffer is the single largest term in
-   * glass-to-glass delay on a relayed pair, and 120 is about the floor that
-   * still rides out RTX on a Singapore relay. --latency walks it further down
-   * until stutter appears. */
-  App self = { .latency_ms = 120 };
+  /* The jitter buffer is the single largest term in glass-to-glass delay on a
+   * relayed pair, so it is the first place to look for latency — but 120 ms
+   * was below the floor: a measured round trip of ~100 ms to the relay left no
+   * room for a retransmission to arrive, and the picture stuttered. 200 holds
+   * one. --latency walks it either way. */
+  App self = { .latency_ms = 200 };
 
   /* First statement in main(): before gst_init() runs inside the option parse,
    * and before anything can cache a data directory. */
