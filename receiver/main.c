@@ -44,12 +44,21 @@
 
 #define TOOLBAR_HIDE_MS 2500
 
+/* The two jitter buffer sizes, in milliseconds, that the measurements on this
+ * deployment left standing. choose_latency() picks between them from the pair
+ * ICE selected; the case for each is written where it is used, the relay
+ * number in main() and the direct one above choose_latency(). */
+#define AIRCAST_LATENCY_DIRECT 60
+#define AIRCAST_LATENCY_RELAY 200
+
 typedef struct {
   /* configuration */
   gchar *signal_url;
   gchar *code;
   gchar *record_dir;
-  guint latency_ms;
+  /* Negative until something settles it: --latency on the command line, or
+   * choose_latency() from the pair ICE selected. */
+  gint latency_ms;
   gboolean relay_only;
   gboolean insecure;
   gboolean selftest;
@@ -688,7 +697,13 @@ build_pipeline (App *self, JsonObject *turn)
       "ice-transport-policy", self->relay_only
           ? GST_WEBRTC_ICE_TRANSPORT_POLICY_RELAY
           : GST_WEBRTC_ICE_TRANSPORT_POLICY_ALL,
-      "latency", self->latency_ms,
+      /* The relay number is where webrtcbin starts, because it is the one that
+       * is harmless to be wrong about: too much buffer on a direct pair costs
+       * delay nobody dies of, too little on a relayed one costs the picture.
+       * choose_latency() lowers it when the first pad shows the path is
+       * direct, early enough that the sink is never told anything else. */
+      "latency", self->latency_ms < 0 ? (guint) AIRCAST_LATENCY_RELAY
+                                      : (guint) self->latency_ms,
       NULL);
   /* The jitterbuffers are created on the fly, one per stream, and webrtcbin
    * exposes no property for them — its rtpbin child and this signal are the
@@ -913,6 +928,114 @@ attach_paintable (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
+/* The jitter buffer is sized from the path ICE actually got. The two paths want
+ * numbers more than three times apart and only the program knows which one it
+ * is holding, so the choice belongs here and not in a flag somebody has to
+ * remember before double-clicking a shortcut.
+ *
+ * Both numbers were walked by hand on this deployment, one value per cast. On a
+ * direct pair 60 ms and 40 ms were each clean on all four counters that matter,
+ * no packets lost, no keyframe requests, no discont, no sink overruns, and were
+ * indistinguishable to watch. 20 ms broke it outright: gtk4paintablesink logged
+ * "Have too many pending frames" 581 times, gstvideodecoder logged "Dropping
+ * frame due to QoS" 37 times, and the H.264 decoder logged "Invalid frame num,
+ * maybe frame drop" 11 times. So the floor is between 20 and 40, and 60 is the
+ * tested value with a whole step of margin under it. That margin is nearly
+ * free: the 20 ms it gives up against 40 is invisible inside a 70-80 ms
+ * glass-to-glass budget, and the direct round trip it covers is 3 ms. The relay
+ * keeps 200, for the reasons set out in main().
+ *
+ * Only a pair that is host at both ends gets the fast number. One relayed leg
+ * is enough to make the path slow, the relay being 41 ms from the notebook and
+ * 52 from the tablet, so both ends are read rather than just ours. A reflexive
+ * pair is genuinely direct, but its round trip is whatever the internet between
+ * the two peers happens to be and nothing here has measured that, so it keeps
+ * the value that is safe to be wrong about.
+ *
+ * This signal is the first moment webrtcbin can answer the question at all, and
+ * that is a fact about webrtcbin rather than about ICE. Its stats reach an ICE
+ * transport only through a pad, and a receive-only session has no pad until
+ * rtpbin hands one over: the receive pad is built when the answer is set and
+ * then parked, under webrtcbin's own comment about delaying the pad until
+ * rtpbin creates the recv output pad. Asking at connection-state CONNECTED asks
+ * an element that has nothing to walk, and it answers with a report containing
+ * no candidates. By the time this runs the pad exists and ICE settled long ago:
+ * on the 60 ms run ICE reached completed 253 ms before the first jitterbuffer
+ * was created, and this signal comes after that one. It cannot be otherwise,
+ * since no RTP reaches rtpbin before ICE has a pair to carry it.
+ *
+ * The jitterbuffer therefore already exists here, which invites doing this from
+ * the new-jitterbuffer handler above and skipping live reconfiguration
+ * entirely. That deadlocks: rtpbin emits that signal from inside create_stream
+ * with the session lock held, and webrtcbin's latency setter walks down to the
+ * jitterbuffers behind the same lock. Setting webrtcbin's property rather than
+ * the element's is also what makes one call cover the jitterbuffer that exists,
+ * any a second stream would create, and rtpstorage's matching size.
+ *
+ * Nothing needs recalculating afterwards, because the tail that holds the sink
+ * is built further down this same function: the sink is configured with the
+ * chosen number the first time it is configured, and the picture never sees a
+ * change. Moving the value once the sink is running is a different job, and if
+ * the path changes under a live cast the number stays where it was. That is a
+ * stutter, not a black window, and the cure is --latency or restarting. */
+static void
+choose_latency (App *self, GstPad *pad)
+{
+  GstPromise *promise;
+  const GstStructure *reply = NULL;
+  guint candidates = 0, host = 0;
+
+  /* --latency is an override and turns the choice off. It doubles as the
+   * fired-once guard: the number chosen below goes into the same field, so a
+   * second pad finds the question already answered. */
+  if (self->latency_ms >= 0)
+    return;
+
+  promise = gst_promise_new ();
+  g_signal_emit_by_name (self->webrtc, "get-stats", pad, promise);
+  if (gst_promise_wait (promise) == GST_PROMISE_RESULT_REPLIED)
+    reply = gst_promise_get_reply (promise);
+
+  /* A candidate appears in the report only as half of the pair ICE selected, so
+   * counting them is the whole test and there is no need to follow
+   * local-candidate-id and remote-candidate-id back to their structures.
+   * candidate-type is libnice's own spelling, host, srflx, prflx or relay,
+   * copied straight through. It is not the GstWebRTCICECandidateType nick,
+   * which spells the same four types host, server-reflexive, peer-reflexive and
+   * relayed. */
+  for (gint i = 0; reply && i < gst_structure_n_fields (reply); i++) {
+    const gchar *name = gst_structure_nth_field_name (reply, i);
+    const GValue *value = gst_structure_get_value (reply, name);
+    const gchar *type;
+
+    if (!GST_VALUE_HOLDS_STRUCTURE (value))
+      continue;
+    type = gst_structure_get_string (gst_value_get_structure (value),
+        "candidate-type");
+    if (!type)
+      continue;
+    candidates++;
+    if (g_str_equal (type, "host"))
+      host++;
+  }
+  gst_promise_unref (promise);
+
+  /* Every candidate host, and at least one of them, is the only shape that was
+   * ever measured. Everything else takes the relay value, and so does
+   * everything that went wrong: no reply, a reply carrying an error instead of
+   * a report, or a transport with no selected pair yet. All of those count zero
+   * and leave the number where build_pipeline put it. */
+  self->latency_ms = (candidates > 0 && host == candidates)
+      ? AIRCAST_LATENCY_DIRECT : AIRCAST_LATENCY_RELAY;
+  g_object_set (self->webrtc, "latency", (guint) self->latency_ms, NULL);
+  /* One line on stderr, because this is now a number nobody typed and the
+   * receiver's own log is the only place it can be read back. */
+  g_printerr ("jitter buffer: %d ms (%s)\n", self->latency_ms,
+      self->latency_ms == AIRCAST_LATENCY_DIRECT
+          ? "ICE selected a host pair"
+          : "relayed, reflexive or unknown path");
+}
+
 /* One tail per incoming pad, chosen from the RTP caps. H.264 is what the phone
  * sends when it can; VP8 is the floor for devices libwebrtc does not consider
  * H.264-capable, and the two tails differ only in the first two elements. */
@@ -921,6 +1044,8 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
 {
   if (GST_PAD_DIRECTION (pad) != GST_PAD_SRC)
     return;
+
+  choose_latency (self, pad);
 
   GstCaps *caps = gst_pad_get_current_caps (pad);
   if (!caps)
@@ -1430,10 +1555,19 @@ main (int argc, char *argv[])
    * off a budget of three or four hundred, which nobody sees, and pays for it
    * in the exact sharpness that was just fixed.
    *
-   * --latency still walks it either way, and it is worth re-walking: the run
-   * that made 120 ms stutter predates every fix since. Below about 120 the
-   * frames themselves start arriving past their own render time. */
-  App self = { .latency_ms = 200 };
+   * All of that is the relayed path, and it is no longer the only path this
+   * program sees. -1 means nobody has chosen yet: build_pipeline starts
+   * webrtcbin on the relay number above, because that is the one that is safe
+   * to be wrong about, and choose_latency() drops it to
+   * AIRCAST_LATENCY_DIRECT when the first pad shows a pair that is host at
+   * both ends. The same walk on a direct pair bottoms out between 20 and 40 ms
+   * rather than at 200, which is a different curve entirely: there is no relay
+   * to cross and no retransmission worth waiting three round trips for.
+   *
+   * --latency overrides both numbers and turns the choice off, and it is still
+   * worth re-walking: the run that made 120 ms stutter predates every fix
+   * since. */
+  App self = { .latency_ms = -1 };
 
   /* First statement in main(): before gst_init() runs inside the option parse,
    * and before anything can cache a data directory. */
@@ -1447,7 +1581,10 @@ main (int argc, char *argv[])
     { "record-dir", 'r', 0, G_OPTION_ARG_FILENAME, &self.record_dir,
         "Where the record button writes .mkv files (default: home)", "DIR" },
     { "latency", 'l', 0, G_OPTION_ARG_INT, &self.latency_ms,
-        "Jitter buffer in ms (default 200, the first knob to tune)", "MS" },
+        "Jitter buffer in ms, and turns off the automatic choice. Left out, "
+        "the path chooses: " G_STRINGIFY (AIRCAST_LATENCY_DIRECT) " on a "
+        "direct pair, " G_STRINGIFY (AIRCAST_LATENCY_RELAY) " on a relayed "
+        "one", "MS" },
     { "insecure", 0, 0, G_OPTION_ARG_NONE, &self.insecure,
         "Allow a plaintext ws:// signalling URL. LAN bring-up only", NULL },
     { "selftest", 0, 0, G_OPTION_ARG_NONE, &self.selftest,

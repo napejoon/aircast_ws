@@ -154,11 +154,39 @@ class CastSession {
         // unset (kDefaultVideoMaxFramerate, media/base/media_constants.cc), so
         // this is the cap getting out of the way rather than a new demand. It
         // can still be taken back: getDisplayMedia builds the source with
-        // createVideoSource(true), and a screencast source sheds CPU overuse by
-        // MAINTAIN_RESOLUTION, whose only lever is the frame rate. Measure
-        // before believing it landed.
+        // createVideoSource(true), and a screencast source sheds CPU overuse
+        // whichever way the preference below names. It landed: every encoder
+        // session in `adb shell dumpsys media.metrics` reports
+        // frame-rate=6.000000e+01 at width 2304, height 1440.
         e.maxFramerate = 60;
       }
+      // Name the degradation preference, because the round trip through
+      // flutter_webrtc has been naming it for us. libwebrtc leaves
+      // degradation_preference unset, so the JNI hands Java a null and the
+      // Android getter omits the key; webrtc_interface maps the missing key
+      // straight to BALANCED with no null guard, its
+      // degradationPreferenceforString falling through to that value; and toMap
+      // sends it back down. So every setParameters in this method has quietly
+      // written "balanced" since the day it was written, and the
+      // MAINTAIN_RESOLUTION a screencast source is supposed to inherit is only
+      // reached while nobody names a preference at all.
+      //
+      // Naming MAINTAIN_FRAMERATE changes no behaviour at this frame size, and
+      // that is the honest reason for it rather than any latency claim.
+      // 2304x1440 is 3,317,760 pixels and BALANCED only starts shedding frames
+      // below 640x480: its down-step asks MinFps first, which has no config
+      // above 640x480 and returns int max, so CanDecreaseFrameRateTo is false
+      // and the case falls through into MAINTAIN_FRAMERATE's DecreaseResolution
+      // anyway. Five 3/5 steps separate us from the size where the two differ.
+      // What this line buys is that the preference is ours and stays ours if
+      // the resolution ever drops. If we ever cast to read text while the
+      // tablet is busy, MAINTAIN_RESOLUTION is the one identifier to change.
+      //
+      // Never MAINTAIN_FRAMERATE_AND_RESOLUTION: webrtc_interface defines it
+      // but libwebrtc's Java enum has no such constant, and the JNI answers an
+      // unknown name with a check that aborts the process rather than throwing
+      // something Dart can catch.
+      params.degradationPreference = RTCDegradationPreference.MAINTAIN_FRAMERATE;
       await sender.setParameters(params);
     }
   }
