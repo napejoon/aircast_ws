@@ -3,9 +3,11 @@ package io.aircast.sender
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.MediaCodec
@@ -17,6 +19,7 @@ import android.net.LocalServerSocket
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.DisplayMetrics
@@ -51,6 +54,16 @@ class UsbCastService : Service() {
     @Volatile
     private var socketName = "aircast"
 
+    /**
+     * The SPS and PPS, kept from the codec-config buffer MediaCodec emits once
+     * at the head of the stream. Filled on the serve thread by whichever
+     * desktop drains that buffer and read there by every desktop after it;
+     * cleared on the main thread in stopCasting, and that crossing is what
+     * makes it volatile.
+     */
+    @Volatile
+    private var codecConfig: ByteArray? = null
+
     @Volatile
     private var running = false
 
@@ -61,6 +74,26 @@ class UsbCastService : Service() {
             ACTION_STOP -> {
                 stopCasting()
                 stopSelf()
+                // The notification's Stop button lands here too, and on the
+                // WebRTC path stopCasting() above ends nothing the user can
+                // see: that capture belongs to flutter_webrtc, over in the Dart
+                // process, and this service holds only the notification and the
+                // wake lock. A button that took the notification away and left
+                // the screen still being mirrored would be worse than no button
+                // at all.
+                //
+                // It settles in one round whichever direction it starts from.
+                // Dart's own stop arrives here and then hears its own echo,
+                // which finds nothing: _stop in main.dart clears its fields
+                // before its first await. The button runs the other way round —
+                // Dart tears the session down and then calls stop() back down
+                // here (main.dart's usb branch, and session.dart's Android
+                // branch on the WebRTC path), which builds this service once
+                // more only to stop it again, and it is that second echo which
+                // finds the fields already empty. The bounce costs a service
+                // create and destroy and posts nothing, because this branch
+                // never calls startForeground.
+                onStopped?.invoke()
             }
 
             ACTION_START -> start(intent)
@@ -72,7 +105,7 @@ class UsbCastService : Service() {
             // which kills the process before any Dart catch can see it. This
             // action exists so that call has somewhere to stand.
             ACTION_HOLD -> {
-                startForegroundWithNotification("Casting this screen")
+                startForegroundWithNotification("Over the network")
                 keepScreenOn()
                 // Only now is getMediaProjection() legal. The plugin waits for
                 // this before answering Dart, because startForegroundService()
@@ -140,6 +173,23 @@ class UsbCastService : Service() {
                 // One second between keyframes: the receiver can join mid-stream
                 // without waiting, at a few percent of bitrate.
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                // That interval is counted in encoded frames, not in seconds,
+                // and a VirtualDisplay hands the encoder a frame only when the
+                // mirrored screen changes — so "one second" is really thirty
+                // frames, and on a still screen thirty frames is a minute.
+                // Measured on this tablet with screenrecord, which drives the
+                // same VirtualDisplay through the same encoder: four seconds of
+                // an idle screen produced two slices, and fourteen seconds with
+                // an animation running produced a hundred and seventy-six, one
+                // IDR among them. Without a floor under that rate the sync
+                // frame pump() asks for on every new desktop waits for the user
+                // to touch something. Re-encoding the last frame after a tenth
+                // of a second of quiet costs a few hundred bytes of skipped
+                // macroblocks while nothing is moving, and nothing at all while
+                // something is, because it only fires when no real frame came.
+                // setLong, not setInteger: the framework reads this key with
+                // findInt64 and silently ignores an Int.
+                setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
                 setInteger(
                     MediaFormat.KEY_BITRATE_MODE,
                     MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR,
@@ -204,6 +254,42 @@ class UsbCastService : Service() {
     private fun pump(client: LocalSocket, codec: MediaCodec) {
         val out: OutputStream = client.outputStream
         val info = MediaCodec.BufferInfo()
+        // MediaCodec hands out the SPS and PPS exactly once, in the
+        // codec-config buffer at the head of the stream, so the first desktop
+        // of a cast is the only one that ever sees them. Every desktop after it
+        // — and closing gst-launch and starting it again is the whole of this
+        // path's workflow — was handed a stream beginning mid-GOP with nothing
+        // for a decoder to configure itself from, which libavcodec answers with
+        // "Invalid data found" and no picture at all, for as long as that
+        // desktop stays connected. Replay the bytes that worked for the first
+        // one. This encoder was checked rather than assumed: fourteen seconds
+        // of its output, read off the tablet, carried one SPS and one PPS, both
+        // at the head, so there is nothing in band to fall back on.
+        val header = codecConfig
+        if (header != null) {
+            try {
+                out.write(header)
+                out.flush()
+            } catch (e: Exception) {
+                Log.i(TAG, "desktop disconnected", e)
+                return
+            }
+        }
+        // Headers alone put nothing on the screen. The decoder understands the
+        // stream at that point, but every frame until the next IDR refers to
+        // pictures this desktop never received and is discarded without a word,
+        // and the wait for that IDR is not the one second KEY_I_FRAME_INTERVAL
+        // reads like — it is thirty encoded frames, which is as long as the
+        // screen takes to change thirty times. Asking for a sync frame costs
+        // whatever the encoder had already queued while nobody was connected —
+        // the decoder throws that away too — and then the IDR arrives and the
+        // picture starts. It lands promptly only because the format above puts
+        // a floor under the frame rate; the request itself is applied to the
+        // next frame the input surface delivers, and a still screen delivers
+        // none.
+        codec.setParameters(Bundle().apply {
+            putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+        })
         // MediaCodec warns that holding buffers stalls the codec, so every
         // buffer is written and released in the same iteration.
         while (running) {
@@ -217,6 +303,11 @@ class UsbCastService : Service() {
                         buffer.limit(info.offset + info.size)
                         val bytes = ByteArray(info.size)
                         buffer.get(bytes)
+                        // Kept before the write, so a desktop that dies on this
+                        // very buffer still leaves the headers for the next one.
+                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                            codecConfig = bytes
+                        }
                         out.write(bytes)
                         out.flush()
                     }
@@ -231,16 +322,56 @@ class UsbCastService : Service() {
         }
     }
 
-    private fun startForegroundWithNotification(text: String = "Casting this screen over USB") {
+    private fun startForegroundWithNotification(text: String = "Over the USB cable") {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Screen cast", NotificationManager.IMPORTANCE_LOW)
         )
+        // Tapping the body brings aircast back. Without it the notification was
+        // a dead end: while a cast runs the user is by definition inside some
+        // other app — that is the thing being mirrored — so the only route back
+        // to the Stop button in our own window was to go and find the launcher
+        // icon. NEW_TASK because a Service has no task of its own to start an
+        // activity in; CLEAR_TOP against the manifest's singleTop so the
+        // running instance is resumed and handed the intent rather than a
+        // second copy being stacked on top of it. FLAG_IMMUTABLE is mandatory
+        // from API 31 and has existed since 23, so at this app's floor of 26 it
+        // needs no guard.
+        val open = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        val stop = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, UsbCastService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         val notification: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("aircast")
+            // Not "aircast": the notification header already carries the app
+            // name and the icon, so that title line was spent saying something
+            // the user could already see. This is the one sentence someone
+            // reads out of the corner of their eye while using another app, so
+            // it answers the thing they are actually worried about, in the same
+            // words the app's own card uses (sender/lib/main.dart).
+            .setContentTitle("Your screen is being mirrored")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setOngoing(true)
+            .setContentIntent(open)
+            // The same label as the button in the app, because it ends the same
+            // thing. The framework wants an icon here even on templates that do
+            // not draw one.
+            .addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    "Stop mirroring",
+                    stop,
+                ).build()
+            )
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
@@ -307,6 +438,11 @@ class UsbCastService : Service() {
         projection?.stop()
         virtualDisplay = null
         codec = null
+        // The next cast configures its own encoder, and if the tablet has been
+        // turned meanwhile that encoder's SPS carries different dimensions.
+        // Replaying this one's headers to that cast's first desktop would
+        // describe a picture it is not about to receive.
+        codecConfig = null
         projection = null
     }
 

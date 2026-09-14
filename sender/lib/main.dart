@@ -75,7 +75,19 @@ class _SenderPageState extends State<SenderPage> {
   void initState() {
     super.initState();
     if (Platform.isAndroid) {
-      UsbCast.onStopped = () => _stop(status: 'Android stopped the screen capture');
+      // Fires when Android takes the capture away — consent revoked, the screen
+      // locking, another app claiming the projection — and now also when the
+      // user presses Stop in the notification. That second case is why the
+      // wording no longer blames Android: it would be a lie in the commonest
+      // case there is, someone ending their own cast from the shade.
+      UsbCast.onStopped = () => _stop(status: 'Mirroring stopped');
+      // Asked here rather than when a cast begins: the answer has to be in
+      // before the service posts, since a notification refused at enqueue is
+      // dropped and not held, and every moment inside a cast is either racing
+      // the capture-consent dialog or sitting inside the foreground-service
+      // deadline. Not awaited, because a refusal changes nothing we do and no
+      // cast should wait on a dialog it does not need.
+      UsbCast.askToNotify();
     }
   }
 

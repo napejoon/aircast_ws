@@ -8,7 +8,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 ///
 ///   out  {"type":"join","code":"123456","role":"sender"}
 ///   in   {"type":"joined","turn":{"urls":[...],"username":"...","credential":"..."}}
-///   in   {"type":"peer"}                  receiver joined, safe to offer
+///   in   {"type":"peer"}                  a receiver joined, offer to it
 ///   out  {"type":"offer","sdp":"..."}
 ///   in   {"type":"answer","sdp":"..."}
 ///   both {"type":"candidate","candidate":{"candidate":"...","sdpMid":"...","sdpMLineIndex":0}}
@@ -57,6 +57,19 @@ class Signaling {
   void Function(Map<String, dynamic> candidate)? onCandidate;
   void Function(String reason)? onClosed;
 
+  /// The second `peer` frame, and every one after it.
+  ///
+  /// The server sends one whenever a receiver joins this code, and a receiver
+  /// that loses its signalling socket mid-cast rejoins with the same code —
+  /// the only one it has, the one printed on its own screen. What comes back
+  /// is not the peer that answered: the receiver builds its pipeline once per
+  /// socket, so it arrives with a webrtcbin seconds old, its own ICE
+  /// credentials and its own DTLS certificate. The completer above is one-shot
+  /// and start() awaits it exactly once, so until this callback existed the
+  /// phone was told and did nothing at all: the desktop read "Negotiating" for
+  /// ever while this app went on saying it was mirroring.
+  void Function()? onPeerRejoined;
+
   Future<void> connect() async {
     // Whichever of these the caller does not await still gets an error on
     // failure, and an unlistened completer error is an uncaught async error —
@@ -104,7 +117,17 @@ class Signaling {
           ));
         }
       case 'peer':
-        if (!_peer.isCompleted) _peer.complete();
+        // The first one is the receiver this cast was started for, and it
+        // releases start(). Every one after it is a receiver that has to be
+        // offered to again. _fail and close complete this same completer with
+        // an error, so isCompleted is true on a dead session too, which is why
+        // the session's handler checks that it still has a peer connection
+        // before it offers anything.
+        if (_peer.isCompleted) {
+          onPeerRejoined?.call();
+        } else {
+          _peer.complete();
+        }
       case 'answer':
         onAnswer?.call(msg['sdp'] as String);
       case 'candidate':

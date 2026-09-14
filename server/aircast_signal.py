@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """aircast signalling server.
 
-Pairs two peers on a 6-digit code, buffers the sender's offer until the
-receiver arrives, relays ICE candidates both ways, and mints short-lived TURN
-REST credentials. Protocol: docs/protocol/signalling.md.
+Pairs two peers on a 6-digit code, tells each side when the other arrives,
+relays the offer, the answer and ICE candidates both ways, and mints
+short-lived TURN REST credentials. Protocol: docs/protocol/signalling.md.
 
 Configuration comes from the environment (systemd EnvironmentFile), so the
 shared secret never appears in the unit file or in `ps`:
@@ -105,8 +105,15 @@ class Pairing:
 
     created: float = field(default_factory=time.monotonic)
     peers: dict[str, ServerConnection] = field(default_factory=dict)
-    # The answerer cannot answer before it has the offer, so hold it.
-    offer: dict | None = None
+    # True from the moment both roles have been present at once, and never
+    # false again. The TTL below is for a code nobody claimed, and a cast in
+    # progress is not that: a receiver whose signalling socket blips leaves this
+    # pairing one peer short for about a second, and expiring it there closed
+    # the sender's socket with "pairing expired" -- to a phone that was
+    # mirroring, on every cast that had run longer than the 300 s window, which
+    # is every cast anyone sits through. The rejoin then found nobody left to be
+    # offered to, which is the whole of what the rejoin is for.
+    paired: bool = False
 
 
 class Server:
@@ -232,15 +239,26 @@ class Server:
         other = ROLES[0] if role == ROLES[1] else ROLES[1]
         peer = pairing.peers.get(other)
         if peer is not None:
-            # Tell both sides, and flush the buffered offer to a receiver that
-            # joined after the sender.
+            pairing.paired = True
+            # Tell both sides. This frame is the sender's cue to offer, every
+            # time and not only the first, which is why nothing here keeps the
+            # last offer to hand to a receiver that joined late.
+            #
+            # Holding one was worse than useless. The sender never offers until
+            # it has been told a peer is there, so an offer older than the
+            # receiver cannot exist; what the buffer actually held was the offer
+            # of a cast already in progress, and the only receiver it was ever
+            # replayed to was one that had just rebuilt its pipeline and could
+            # answer it with nothing but a certificate and credentials the phone
+            # had not asked to change. The phone refused that answer, the
+            # desktop sat on "Negotiating", and the cast was over. An offer that
+            # arrives while the receiver is briefly gone is dropped instead, and
+            # the rejoin that follows asks for a new one.
             await asyncio.gather(
                 ws.send(json.dumps({"type": "peer"})),
                 peer.send(json.dumps({"type": "peer"})),
                 return_exceptions=True,
             )
-            if role == "receiver" and pairing.offer is not None:
-                await ws.send(json.dumps(pairing.offer))
         log.info("code %s: %s joined", code, role)
         return code, role
 
@@ -248,8 +266,6 @@ class Server:
         pairing = self.pairings.get(code)
         if pairing is None:
             return
-        if msg["type"] == "offer" and role == "sender":
-            pairing.offer = msg
         other = ROLES[0] if role == ROLES[1] else ROLES[1]
         peer = pairing.peers.get(other)
         if peer is not None:
@@ -287,7 +303,7 @@ class Server:
     def _expire(self) -> None:
         now = time.monotonic()
         for code, pairing in list(self.pairings.items()):
-            if now - pairing.created > self.ttl and len(pairing.peers) < 2:
+            if now - pairing.created > self.ttl and not pairing.paired:
                 for ws in pairing.peers.values():
                     asyncio.create_task(ws.close(code=1000, reason="pairing expired"))
                 del self.pairings[code]

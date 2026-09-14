@@ -608,12 +608,16 @@ on_connection_state (GstElement *webrtc, GParamSpec *pspec, App *self)
      * offer would be negotiated on, because build_pipeline runs only when a
      * join is answered, and the server answers a join once per socket.
      *
-     * The signalling socket is left alone on purpose. Dropping it would make
-     * the server replay the offer it has buffered for this pairing to the
-     * rejoining receiver, and the phone cannot take a second answer for an
-     * offer it has already had one for. From an idle source, because this runs
-     * on a webrtcbin task thread and everything drop_session touches belongs to
-     * the main one. */
+     * The signalling socket is left alone, and now for a different reason than
+     * the one this comment used to give. The old reason is gone: the server no
+     * longer replays a buffered offer at a rejoining receiver, and the phone
+     * offers again every time it is told a peer has joined. What is left is
+     * that there is nothing on the other end to recover to, because the phone
+     * reads this same ICE failure as the end of the cast and stops its own
+     * capture. Teach the sender to survive a failed connection and dropping the
+     * socket here is what would put the picture back. From an idle source,
+     * because this runs on a webrtcbin task thread and everything drop_session
+     * touches belongs to the main one. */
     g_idle_add (drop_session_idle, self);
   }
 }
@@ -1426,8 +1430,16 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
    * later than pts + 200 ms and three of those were already late against
    * pts + 215. The worst was in at pts + 227, still inside the drop test, which
    * only discards a frame past its deadline plus its own duration plus
-   * max-lateness (gstbasesink.c:3127), some 38 ms further out. So a couple of
-   * frames per half hour paint late instead of on the beat, and none vanish. */
+   * max-lateness (gstbasesink.c:3126-3132; the 5 ms is gstvideosink.c:177, the
+   * line below the 15 this paragraph opens with), some 22 ms further out. The
+   * margin is a frame period plus those 5, so it read 38 while the sender was
+   * capped at 30 and reads 22 now the cap is 60, and it moved because the frame
+   * rate did rather than because anything here changed. 16.67 ms is its floor:
+   * a buffer carrying no duration is given the running average of the
+   * inter-frame gap instead, which is longer. The 227 was measured at 30 fps,
+   * but what it measures is the network arriving late, and 12 ms clears 22. So
+   * a couple of frames per half hour paint late instead of on the beat, and
+   * none vanish. */
   gchar *desc = g_strdup_printf (
       "%s ! tee name=t allow-not-linked=true "
       "t. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 ! %s ! videoconvert ! "
@@ -1946,6 +1958,33 @@ main (int argc, char *argv[])
         "costs a round trip the two peers may not need. The sender needs "
         "--dart-define=AIRCAST_RELAY=true or it will offer host candidates "
         "this side will not pair with.\n");
+
+  /* Without this every frame is scaled and blitted by the CPU. GTK 4.24 leaves
+   * Direct Composition off by default on Windows, and gdk/win32 makes both the
+   * GL and the Vulkan context require it unconditionally
+   * (gdkglcontext-win32.c:81, gdkvulkancontext-win32.c:133, both asking
+   * gdk_win32_display_get_dcomp_device), so the renderer falls all the way back
+   * to GskCairoRenderer -- confirmed on the shipped binary, which printed
+   * "OpenGL requires Direct Composition" and then "Using renderer
+   * 'GskCairoRenderer'" until this line existed. The upstream comment
+   * (gdkdisplay-win32.c:511) says the opt-in is about black borders under GL
+   * and that the default flips back when the D3D12 renderer lands.
+   *
+   * What it costs to leave alone is not small and not linear. Measured against
+   * the bundle's own libcairo with a real 2304x1440 frame: 3.8 ms when the
+   * window happens to be at 1:1 or an exact half, but 31.7 ms in the default
+   * 1100x760 window and 47 ms at 0.75 -- the sink appends a plain
+   * GskTextureNode without setting a filter, so cairo downscales with
+   * FILTER_GOOD, a separable convolution. 31.7 ms of main-thread paint against
+   * a 16.67 ms frame is a hard 32 fps ceiling, and it is where the warning
+   * "Have too many pending frames" comes from:
+   * that warning is gtk4paintablesink's 3-slot channel to the GTK main thread
+   * overflowing, not the jitter buffer running short.
+   *
+   * Set rather than overridden, so GDK_DEBUG from the environment still wins;
+   * gdk_pre_parse reads it with g_getenv at gtk_init time, which is why it has
+   * to be here and not in harden_environment's neighbourhood by accident. */
+  g_setenv ("GDK_DEBUG", "dcomp", FALSE);
 
   gtk_init ();
 

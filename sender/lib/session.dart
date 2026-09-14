@@ -119,6 +119,79 @@ class CastSession {
     final offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     _signaling.sendOffer(offer.sdp!);
+
+    // Only now, so that the first offer and a re-offer can never be under
+    // construction at the same time. A receiver can drop and come back while
+    // the user is still reading the capture consent dialog: the completer above
+    // was completed by the first of those frames the moment it arrived, so the
+    // second lands here with nothing wired to it yet and is dropped. That is
+    // the right outcome and not a hole — the offer built just above is the only
+    // offer in flight, and it reaches whichever receiver is holding the role by
+    // the time the server relays it.
+    _signaling.onPeerRejoined = () async {
+      try {
+        await _reoffer();
+      } on Object catch (e) {
+        // Nothing awaits this: it runs from a signalling frame, so an error
+        // escaping here would be an uncaught async error rather than something
+        // main.dart could put on the status line. What the user sees is the
+        // connection state, which is already wired to onState.
+        debugPrint('aircast: the re-offer failed: $e');
+      }
+    };
+  }
+
+  /// True from the moment a re-offer starts until it is on the wire.
+  ///
+  /// Two offers in flight is the one way this can end worse than the bug it
+  /// fixes: the receiver answers the first, this side has already replaced its
+  /// local description with the second, and the answer then keys its
+  /// connectivity checks to an ice-ufrag this side has thrown away. That is an
+  /// ICE failure, which tears the cast down, rather than a negotiation that
+  /// merely stalls. The window is the few milliseconds an offer takes to
+  /// build, and a `peer` frame can only land inside it if a receiver rejoined
+  /// twice that fast — its own reconnect backoff starts at a second and
+  /// doubles (receiver/main.c).
+  bool _reoffering = false;
+
+  /// Offer again, to a receiver that has joined this code a second time.
+  ///
+  /// The renegotiation itself is ordinary: the capture track, the
+  /// transceiver's codec preferences and the sender parameters all still
+  /// belong to this peer connection, so the new offer is the old one with new
+  /// ICE credentials and a bumped version, and nothing here has to be set up
+  /// twice.
+  ///
+  /// The restart is what makes those credentials new, and it is not optional.
+  /// The receiver that comes back has built a second webrtcbin, which means a
+  /// second DTLS certificate: two runs of the shipped receiver on one code
+  /// answered with fingerprints 59:14:F4:19… and 48:E7:4E:17… and with a
+  /// different ice-ufrag each time. JSEP is explicit about that case (RFC 8829
+  /// §5.10) — a changed remote fingerprint tears the DTLS connection down, and
+  /// if the answer that changed it does not also carry new ICE credentials, an
+  /// error MUST be generated instead. Asking for the restart here is what puts
+  /// new credentials in our own offer and lets the answer's be legal. It costs
+  /// a re-gather: the same host candidates from the same interfaces, and a
+  /// fresh allocation on the relay.
+  ///
+  /// restartIce() rather than an `IceRestart` constraint on createOffer,
+  /// because flutter_webrtc's Android side reads only the `mandatory` and
+  /// `optional` keys of the constraints map (MediaConstraintsUtils), so a flat
+  /// one would be dropped on the floor without a word.
+  Future<void> _reoffer() async {
+    final pc = _pc;
+    // No connection to offer on: stop() has already disposed it, and this
+    // handler is still wired to a session the UI has let go of.
+    if (pc == null || _reoffering) return;
+    _reoffering = true;
+    try {
+      await pc.restartIce();
+      final offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      _signaling.sendOffer(offer.sdp!);
+    } finally {
+      _reoffering = false;
+    }
   }
 
   /// Congestion control decides the bitrate; this is only the ceiling. It has

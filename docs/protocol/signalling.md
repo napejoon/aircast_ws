@@ -17,7 +17,7 @@ goes first.
 |---|---|
 | client → server | `{"type":"join","code":"123456","role":"sender"\|"receiver"}` |
 | server → client | `{"type":"joined","turn":{"urls":[...],"username":"...","credential":"..."}}` |
-| server → client | `{"type":"peer"}` — the other side has joined this code |
+| server → client | `{"type":"peer"}` — the other side has joined this code, and the sender offers on every one |
 | sender → server → receiver | `{"type":"offer","sdp":"..."}` |
 | receiver → server → sender | `{"type":"answer","sdp":"..."}` |
 | both ways | `{"type":"candidate","candidate":{"candidate":"...","sdpMid":"...","sdpMLineIndex":0}}` |
@@ -27,9 +27,15 @@ goes first.
 ## Server obligations
 
 1. Pair the two peers on the 6-digit code.
-2. **Buffer the offer** until the receiver joins. A peer that joins second must
-   still get the offer that was sent before it arrived; forward-and-forget is a
-   bug.
+2. **Tell both sides** as soon as the second one joins, and every time after
+   that. A receiver that rejoins after a signalling drop is a peer joining, and
+   the sender answers each `peer` with a fresh offer — with an ICE restart,
+   because the receiver that comes back has a new DTLS certificate and RFC 8829
+   §5.10 will not take a changed fingerprint without new ICE credentials. The
+   server holds no offer of its own: the sender never offers before it has been
+   told a peer is there, so an offer older than the receiver cannot exist, and
+   replaying the offer of a cast already in progress only got it answered by a
+   peer the phone could not accept an answer from.
 3. Relay candidates as opaque blobs in both directions, immediately (trickle).
 4. Mint TURN REST credentials per pairing and send them in `joined`:
    `username = "<expiry-unix>:<opaque-id>"`,
@@ -40,7 +46,11 @@ goes first.
    so a credential tied to the 300 s pairing window killed the relay
    allocation five minutes into a working mirror. It is unrelated to coturn's
    `stale-nonce`.
-5. Expire the code and drop the buffered offer on connect or on a short TTL.
+5. Expire a code on a short TTL only while it is still unpaired. Once both
+   sides have been on it at the same time the pairing belongs to them until
+   both their sockets are gone: expiring a live pairing because the receiver's
+   socket blipped closed the sender's with "pairing expired" mid-cast, and the
+   rejoin that followed had nobody left to be offered to.
 
 ## Client obligations
 

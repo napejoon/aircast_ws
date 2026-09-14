@@ -89,8 +89,10 @@ async def test_video_reaches_a_receiver_that_joins_after_the_sender(endpoint):
     ready = asyncio.Event()
 
     sender = asyncio.ensure_future(run_sender(endpoint, ready))
-    # The sender is deliberately first, so the offer is served from the
-    # server's buffer rather than relayed live.
+    # The sender is deliberately first, which used to be described as the order
+    # that exercises the server's offer buffer. It never did: this sender
+    # offers when it is told a peer has joined, like the real one, so by the
+    # time there is an offer there is a receiver to relay it to live.
     await asyncio.sleep(0.3)
     receiver = asyncio.ensure_future(run_receiver(endpoint, frames))
 
