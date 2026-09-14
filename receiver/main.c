@@ -1711,6 +1711,30 @@ build_live_page (App *self)
    * thick dark rounded frame the video is clipped into. */
   GtkWidget *bezel = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_add_css_class (bezel, "bezel");
+  /* CENTER, and that is a decision rather than an oversight. GTK caps a
+   * centred widget at its natural size, and a GtkPicture's natural size is the
+   * paintable's own -- the pixel dimensions of the frame that just arrived --
+   * so the mirror is painted 1:1 and never stretched. The hexpand below is
+   * inert for the same reason: a centred parent is handed no spare space to
+   * pass down.
+   *
+   * The cost is that the picture changes size, because libwebrtc changes
+   * resolution. Measured off the device with a cast live: it opens AT the
+   * source, 2304x1440, and quality_scaler.cc drives it down three steps in
+   * 607 ms to 768x480, sits there fifteen seconds, and regains the source only
+   * forty-four seconds in. It is the QP loop and not the bandwidth estimate --
+   * every video_stream_encoder.cc report in that window reads "dropped (due to
+   * congestion window pushback) 0".
+   *
+   * A GtkAspectFrame wrapper was built to hold the size constant and was
+   * rejected on sight: filling the window means upscaling 768x480 by 2.7, and
+   * what that shows is the encoder's macroblocks, on every frame the QP loop
+   * touches rather than only at the start. Small and sharp beats large and
+   * broken. Anyone minded to try it again should fix the resolution collapse
+   * first -- that is the actual defect, and it lives in sender/lib/session.dart
+   * where MAINTAIN_FRAMERATE tells libwebrtc to spend congestion on pixels. */
+  gtk_widget_set_halign (bezel, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (bezel, GTK_ALIGN_CENTER);
 
   self->picture = gtk_picture_new ();
   gtk_picture_set_content_fit (GTK_PICTURE (self->picture), GTK_CONTENT_FIT_CONTAIN);
@@ -1719,68 +1743,7 @@ build_live_page (App *self)
   gtk_widget_add_css_class (self->picture, "screen");
 
   gtk_box_append (GTK_BOX (bezel), self->picture);
-
-  /* The frame is what makes the picture grow. A GtkPicture's natural size is
-   * the paintable's own size -- the pixel dimensions of the frame that just
-   * arrived -- and the bezel used to be halign/valign CENTER, which asks for
-   * exactly that natural size and no more. The hexpand above never did
-   * anything, because a centred parent is never handed spare space to pass
-   * down. So the mirror was drawn at whatever resolution libwebrtc happened to
-   * be encoding at, and that resolution moves a great deal. Measured from the
-   * device with a cast live (adb logcat, one session): libwebrtc opens the
-   * screen share AT the source, 2304x1440 at 20:27:33.348, and then
-   * quality_scaler.cc drives it down three steps in 607 ms -- 1536x960,
-   * 1024x640, 768x480 by 20:27:33.955. It sits at 768x480 for a full fifteen
-   * seconds, wanders 480x768 / 640x1024 / 1536x960, and only reaches the
-   * source again at 20:28:18, forty-four seconds after the cast started. It is
-   * the QP loop, not the bandwidth estimate: every video_stream_encoder.cc
-   * report in that window reads "dropped (due to congestion window pushback)
-   * 0". MAINTAIN_FRAMERATE is what lets that verdict land on resolution rather
-   * than on frame rate, which is the trade we want and are keeping.
-   *
-   * Before this frame existed the user watched that sequence as a picture that
-   * changed SIZE: the bezel's inner width was read off a screen capture at
-   * 1054 px, which is the encoder's 1024x640 plus 14 px of padding and a 1 px
-   * border each side, to the pixel. After it the size holds and what changes
-   * is sharpness -- at the 768x480 plateau the receiver upscales 2.7x linearly
-   * for fifteen seconds. That is the price of "fit my screen" and it is the
-   * better part of a minute, not a second or two. The steady picture is
-   * untouched: at the source resolution the painted rectangle is
-   * 1.6*(H-94) x (H-94) both before and after, for every stack height H up to
-   * 1534, which is 2154x1346 fullscreen on the 2560x1440 panel either way.
-   *
-   * GTK_ALIGN_FILL on the bezel alone would fix the size and cost the look:
-   * the dark frame would stretch to the window and the video would letterbox
-   * inside it, which is a video pinned to a wall rather than the phone-shaped
-   * object style.css.h sets out to draw. The aspect frame keeps both. It takes
-   * all the space going, hands its child the largest rectangle inside that
-   * still has the child's own aspect ratio, and centres it -- so the bezel goes
-   * on hugging the video exactly while both scale up together.
-   *
-   * obey_child TRUE rather than a ratio of our own: the source aspect is the
-   * tablet's and changes when it is rotated, and reading it from the child
-   * costs no signal handler on the paintable. The ratio it reads includes the
-   * bezel's 94 px of chrome per axis (14 padding + 32 margin + 1 border a
-   * side), so it is a little wide: 2398/1534 = 1.563 where the content wants
-   * 1.6. Landscape that costs nothing, because height binds either way.
-   * Portrait it reads 0.6397 against a true 0.625 and the picture lands
-   * 736x1178 where the old path drew 752x1204 -- 2.2 percent smaller, with
-   * about 13 px of letterbox top and bottom, black on black against .bezel's
-   * #05070a and .screen's #000000. Width-limited layouts pay the same couple
-   * of percent: 976x610 against 990x619 in the default 1100x760 window.
-   *
-   * Two things this costs that are worth knowing before anyone removes it.
-   * GTK logs one warning per run while no paintable is attached yet --
-   * "GtkAspectFrame reported min height 335 and natural height 334 in
-   * measure() with for_size=-1" -- which is the live page's state between
-   * attach_paintable and the first frame. And a portrait source raises the window's minimum
-   * height, so the window can no longer be shrunk as freely while the tablet
-   * is held upright. */
-  GtkWidget *frame = gtk_aspect_frame_new (0.5f, 0.5f, 1.0f, TRUE);
-  gtk_widget_set_hexpand (frame, TRUE);
-  gtk_widget_set_vexpand (frame, TRUE);
-  gtk_aspect_frame_set_child (GTK_ASPECT_FRAME (frame), bezel);
-  return frame;
+  return bezel;
 }
 
 static GtkWidget *
