@@ -71,6 +71,10 @@ typedef struct {
   SoupSession *session;
   SoupMessage *message;
   SoupWebsocketConnection *ws;
+  /* Seconds to wait before the next signalling attempt, doubling to a ceiling,
+   * and the pending timer so a second failure does not stack another one. */
+  guint reconnect_delay;
+  guint reconnect_source;
 
   /* media */
   GstElement *pipeline;
@@ -859,10 +863,75 @@ on_message (SoupWebsocketConnection *ws, gint type, GBytes *bytes, App *self)
   g_object_unref (parser);
 }
 
+/* The signalling socket is how a phone reaches this window, and losing it is
+ * silent: the window looks exactly as it does when idle, the code on screen is
+ * still the code the user is typing, and every cast they start from then on
+ * goes nowhere. It happened on the first network change measured here. The
+ * phone moved between access points, the ICE pair died, and 76 milliseconds
+ * after the next join arrived the server logged "receiver left" -- after which
+ * the program sat there, connected to nothing, looking healthy.
+ *
+ * So this reconnects rather than reporting. The delay doubles from one second
+ * to thirty so a server that is down is not hammered, and the timer id is kept
+ * because a close can arrive while one attempt is already pending.
+ *
+ * The dead pipeline goes with it. webrtcbin keeps trying to send on a
+ * transport whose consent has been revoked -- the log fills with "Consent to
+ * send has been revoked" every few seconds, indefinitely -- and the next cast
+ * needs a clean webrtcbin anyway, since build_pipeline is what wires one up
+ * from the TURN list the server hands out at join. */
+static gboolean reconnect_signalling (gpointer data);
+
+static void
+drop_session (App *self)
+{
+  if (self->recording)
+    stop_recording (self);
+  if (self->pipeline) {
+    gst_element_set_state (self->pipeline, GST_STATE_NULL);
+    gst_object_unref (self->pipeline);
+    self->pipeline = NULL;
+    self->webrtc = NULL;
+  }
+  self->latency_chosen = 0;
+}
+
 static void
 on_ws_closed (SoupWebsocketConnection *ws, App *self)
 {
-  set_status (self, "The signalling connection closed");
+  if (self->ws == ws) {
+    g_clear_object (&self->ws);
+    drop_session (self);
+  }
+
+  if (self->reconnect_source)
+    return;
+
+  if (self->reconnect_delay < 1)
+    self->reconnect_delay = 1;
+  post_ui (self, "The signalling connection closed. Reconnecting", "idle");
+  self->reconnect_source =
+      g_timeout_add_seconds (self->reconnect_delay, reconnect_signalling, self);
+}
+
+static void
+on_connected (GObject *session, GAsyncResult *result, gpointer user_data);
+
+/* One attempt per timer. The message has to be rebuilt: libsoup will not send
+ * the same SoupMessage twice. */
+static gboolean
+reconnect_signalling (gpointer data)
+{
+  App *self = data;
+
+  self->reconnect_source = 0;
+  self->reconnect_delay = MIN (self->reconnect_delay * 2, 30);
+
+  g_clear_object (&self->message);
+  self->message = soup_message_new (SOUP_METHOD_GET, self->signal_url);
+  soup_session_websocket_connect_async (self->session, self->message, NULL, NULL,
+      G_PRIORITY_DEFAULT, NULL, on_connected, self);
+  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -873,12 +942,26 @@ on_connected (GObject *session, GAsyncResult *result, gpointer user_data)
 
   self->ws = soup_session_websocket_connect_finish (SOUP_SESSION (session), result, &error);
   if (error) {
-    gchar *msg = g_strdup_printf ("Cannot reach the signalling server: %s", error->message);
+    gchar *msg = g_strdup_printf ("Cannot reach the signalling server: %s. Retrying",
+        error->message);
     set_status (self, msg);
     g_free (msg);
     g_error_free (error);
+    /* Arm the next attempt here too. A connect that fails never reaches
+     * on_ws_closed, so without this the first failure would be the last and
+     * the window would sit on the message for ever. */
+    if (!self->reconnect_source) {
+      if (self->reconnect_delay < 1)
+        self->reconnect_delay = 1;
+      self->reconnect_source = g_timeout_add_seconds (self->reconnect_delay,
+          reconnect_signalling, self);
+    }
     return;
   }
+
+  /* Connected, so the next disconnection starts its backoff from one second
+   * again rather than from wherever the last outage left it. */
+  self->reconnect_delay = 1;
 
   g_signal_connect (self->ws, "message", G_CALLBACK (on_message), self);
   g_signal_connect (self->ws, "closed", G_CALLBACK (on_ws_closed), self);
@@ -1539,6 +1622,13 @@ static void
 shutdown_app (GtkApplication *app, gpointer user_data)
 {
   App *self = user_data;
+
+  /* Before anything else: a pending reconnect would otherwise fire into a
+   * half-torn-down app. */
+  if (self->reconnect_source) {
+    g_source_remove (self->reconnect_source);
+    self->reconnect_source = 0;
+  }
 
   if (self->recording)
     stop_recording (self);
