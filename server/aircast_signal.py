@@ -222,8 +222,19 @@ class Server:
             # Asking costs one ping and two seconds, and only when the role
             # looks taken.
             log.info("code %s: replacing a %s that stopped answering", code, role)
-            del pairing.peers[role]
-            incumbent = None
+            # Re-read the table: _still_there parks for two seconds and the
+            # corpse's own handler can finish inside that window. _leave then
+            # removes the role and drops the whole pairing when it empties, so
+            # the blind del was a KeyError and handle() answered 1011 in place
+            # of "joined". Trusting the Pairing read two seconds ago is the
+            # other half of it -- the peers dict may no longer be the one filed
+            # under this code, and a receiver installed in the orphan is a
+            # receiver no sender can ever be paired with, on a socket with
+            # nothing wrong with it, so it never reconnects.
+            pairing = self.pairings.setdefault(code, Pairing())
+            if pairing.peers.get(role) is incumbent:
+                del pairing.peers[role]
+            incumbent = pairing.peers.get(role)
         if incumbent is not None:
             # Two senders on one code: a typo, or someone shadowing a live
             # pairing. Either way the first peer keeps the slot.

@@ -38,6 +38,8 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <objbase.h>
+#define COBJMACROS
+#include <d3d11.h>
 #endif
 
 #include "update_check.h"
@@ -84,6 +86,10 @@ typedef struct {
   GstPad *record_tee_pad;
   gchar *record_mux;            /* the muxer half of the tail, per codec */
   gchar *record_file;
+  /* The TURN block the server sent with "joined". Kept because that message
+   * arrives once per socket and build_pipeline is the only thing that reads
+   * it, so a session that ends while the socket lives needs it a second time. */
+  JsonObject *turn;
 
   /* interface */
   GtkApplication *app;
@@ -95,6 +101,10 @@ typedef struct {
   GtkWidget *revealer;
   GtkWidget *record_button;
   GtkWidget *record_time;
+  /* The same text as status_label, in the toolbar. status_label lives on the
+   * idle card, and the stack is showing the live page whenever the recording
+   * messages at main.c 296, 332, 363 and 425 fire. */
+  GtkWidget *live_status;
   GtkWidget *update_label;      /* passive: last checked, highest version seen */
   gchar *update_url;            /* built from verified integers, or NULL */
 
@@ -178,12 +188,23 @@ static void
 show_page (App *self, const gchar *page)
 {
   gtk_stack_set_visible_child_name (GTK_STACK (self->stack), page);
+  /* Without this the pill carries the last idle-page line over the live video
+   * for the whole cast. "Negotiating" (main.c:939) is the one that lands there
+   * every successful session, because show_page("live") follows it. Nothing is
+   * lost by clearing here: apply_ui_update sets the text before it changes the
+   * page, and both post_ui calls that pass a page pass "idle". */
+  if (self->live_status)
+    gtk_label_set_text (GTK_LABEL (self->live_status), "");
 }
 
 static void
 set_status (App *self, const gchar *text)
 {
   gtk_label_set_text (GTK_LABEL (self->status_label), text);
+  /* build_toolbar runs after build_idle_page, so this is NULL for the first
+   * set_status calls of the run -- which are idle-page messages anyway. */
+  if (self->live_status)
+    gtk_label_set_text (GTK_LABEL (self->live_status), text);
 }
 
 /* GStreamer callbacks arrive on streaming threads; GTK may only be touched
@@ -920,6 +941,27 @@ on_offer (App *self, const gchar *sdp_text)
    * g_signal_emit_by_name calls below are criticals on stderr while
    * "Negotiating" writes over the sentence that said what went wrong: a window
    * stuck for good on a word that is not true. */
+  /* Second cast in one run of the program. "bye" and a failed ICE connection
+   * both end the media session through drop_session without ending the
+   * signalling socket, and "joined" -- the only caller of build_pipeline -- is
+   * answered once per socket and is long past. Measured against the installed
+   * build: an offer identical to one that drew an answer and 40 candidates
+   * drew nothing at all once a "bye" had gone first, while the same double
+   * "peer" without the bye still drew both, which is the control that puts the
+   * cause on drop_session rather than on the repeated peer. Here rather than
+   * on "peer" because every cast has to come through an offer, so one guard
+   * covers bye, ICE failure and anything later that learns to call
+   * drop_session. self->turn may be NULL, which is exactly what the first cast
+   * passes when the server sends no TURN block.
+   *
+   * Tested on !pipeline rather than !webrtc so a build that fails after the
+   * pipeline exists -- webrtcbin missing -- is not retried per offer. The
+   * earlier failure, relay-only with no usable TURN URI, returns before the
+   * pipeline is assigned and so is retried; it costs one overwritten status
+   * line per offer and nothing else, which is the cheaper of the two wrongs. */
+  if (!self->pipeline)
+    build_pipeline (self, self->turn);
+
   if (!self->webrtc) {
     set_status (self, "No media pipeline, so this build cannot take the cast. "
         "See the terminal, and receiver/README.md");
@@ -958,7 +1000,12 @@ on_message (SoupWebsocketConnection *ws, gint type, GBytes *bytes, App *self)
   const gchar *kind = json_object_get_string_member_with_default (msg, "type", "");
 
   if (g_str_equal (kind, "joined")) {
-    build_pipeline (self, json_object_get_object_member (msg, "turn"));
+    JsonObject *turn = json_object_get_object_member (msg, "turn");
+    /* Replaced rather than accumulated: every reconnect brings a fresh one,
+     * and 110 reconnects were measured in one run of the leak test. */
+    g_clear_pointer (&self->turn, json_object_unref);
+    self->turn = turn ? json_object_ref (turn) : NULL;
+    build_pipeline (self, turn);
   } else if (g_str_equal (kind, "peer")) {
     set_status (self, "A phone is connecting…");
   } else if (g_str_equal (kind, "offer")) {
@@ -1664,8 +1711,6 @@ build_live_page (App *self)
    * thick dark rounded frame the video is clipped into. */
   GtkWidget *bezel = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_add_css_class (bezel, "bezel");
-  gtk_widget_set_halign (bezel, GTK_ALIGN_CENTER);
-  gtk_widget_set_valign (bezel, GTK_ALIGN_CENTER);
 
   self->picture = gtk_picture_new ();
   gtk_picture_set_content_fit (GTK_PICTURE (self->picture), GTK_CONTENT_FIT_CONTAIN);
@@ -1674,7 +1719,68 @@ build_live_page (App *self)
   gtk_widget_add_css_class (self->picture, "screen");
 
   gtk_box_append (GTK_BOX (bezel), self->picture);
-  return bezel;
+
+  /* The frame is what makes the picture grow. A GtkPicture's natural size is
+   * the paintable's own size -- the pixel dimensions of the frame that just
+   * arrived -- and the bezel used to be halign/valign CENTER, which asks for
+   * exactly that natural size and no more. The hexpand above never did
+   * anything, because a centred parent is never handed spare space to pass
+   * down. So the mirror was drawn at whatever resolution libwebrtc happened to
+   * be encoding at, and that resolution moves a great deal. Measured from the
+   * device with a cast live (adb logcat, one session): libwebrtc opens the
+   * screen share AT the source, 2304x1440 at 20:27:33.348, and then
+   * quality_scaler.cc drives it down three steps in 607 ms -- 1536x960,
+   * 1024x640, 768x480 by 20:27:33.955. It sits at 768x480 for a full fifteen
+   * seconds, wanders 480x768 / 640x1024 / 1536x960, and only reaches the
+   * source again at 20:28:18, forty-four seconds after the cast started. It is
+   * the QP loop, not the bandwidth estimate: every video_stream_encoder.cc
+   * report in that window reads "dropped (due to congestion window pushback)
+   * 0". MAINTAIN_FRAMERATE is what lets that verdict land on resolution rather
+   * than on frame rate, which is the trade we want and are keeping.
+   *
+   * Before this frame existed the user watched that sequence as a picture that
+   * changed SIZE: the bezel's inner width was read off a screen capture at
+   * 1054 px, which is the encoder's 1024x640 plus 14 px of padding and a 1 px
+   * border each side, to the pixel. After it the size holds and what changes
+   * is sharpness -- at the 768x480 plateau the receiver upscales 2.7x linearly
+   * for fifteen seconds. That is the price of "fit my screen" and it is the
+   * better part of a minute, not a second or two. The steady picture is
+   * untouched: at the source resolution the painted rectangle is
+   * 1.6*(H-94) x (H-94) both before and after, for every stack height H up to
+   * 1534, which is 2154x1346 fullscreen on the 2560x1440 panel either way.
+   *
+   * GTK_ALIGN_FILL on the bezel alone would fix the size and cost the look:
+   * the dark frame would stretch to the window and the video would letterbox
+   * inside it, which is a video pinned to a wall rather than the phone-shaped
+   * object style.css.h sets out to draw. The aspect frame keeps both. It takes
+   * all the space going, hands its child the largest rectangle inside that
+   * still has the child's own aspect ratio, and centres it -- so the bezel goes
+   * on hugging the video exactly while both scale up together.
+   *
+   * obey_child TRUE rather than a ratio of our own: the source aspect is the
+   * tablet's and changes when it is rotated, and reading it from the child
+   * costs no signal handler on the paintable. The ratio it reads includes the
+   * bezel's 94 px of chrome per axis (14 padding + 32 margin + 1 border a
+   * side), so it is a little wide: 2398/1534 = 1.563 where the content wants
+   * 1.6. Landscape that costs nothing, because height binds either way.
+   * Portrait it reads 0.6397 against a true 0.625 and the picture lands
+   * 736x1178 where the old path drew 752x1204 -- 2.2 percent smaller, with
+   * about 13 px of letterbox top and bottom, black on black against .bezel's
+   * #05070a and .screen's #000000. Width-limited layouts pay the same couple
+   * of percent: 976x610 against 990x619 in the default 1100x760 window.
+   *
+   * Two things this costs that are worth knowing before anyone removes it.
+   * GTK logs one warning per run while no paintable is attached yet --
+   * "GtkAspectFrame reported min height 335 and natural height 334 in
+   * measure() with for_size=-1" -- which is the live page's state between
+   * attach_paintable and the first frame. And a portrait source raises the window's minimum
+   * height, so the window can no longer be shrunk as freely while the tablet
+   * is held upright. */
+  GtkWidget *frame = gtk_aspect_frame_new (0.5f, 0.5f, 1.0f, TRUE);
+  gtk_widget_set_hexpand (frame, TRUE);
+  gtk_widget_set_vexpand (frame, TRUE);
+  gtk_aspect_frame_set_child (GTK_ASPECT_FRAME (frame), bezel);
+  return frame;
 }
 
 static GtkWidget *
@@ -1693,6 +1799,19 @@ build_toolbar (App *self)
   gtk_widget_add_css_class (self->record_time, "rec-time");
   gtk_widget_set_visible (self->record_time, FALSE);
 
+  self->live_status = gtk_label_new ("");
+  /* hint, not rec-time: rec-time is the recording indicator's alarm red and
+   * "Saved" is not an alarm. */
+  gtk_widget_add_css_class (self->live_status, "hint");
+  /* MIDDLE, because the two messages worth reading here are file paths and
+   * both ends of one matter. width_chars and max_width_chars both 40 so the
+   * pill is a FIXED size: the revealer is halign CENTER, so a label that
+   * grows with its text slides every button sideways under the cursor that is
+   * about to press one of them -- including Disconnect, two places along. */
+  gtk_label_set_ellipsize (GTK_LABEL (self->live_status), PANGO_ELLIPSIZE_MIDDLE);
+  gtk_label_set_width_chars (GTK_LABEL (self->live_status), 40);
+  gtk_label_set_max_width_chars (GTK_LABEL (self->live_status), 40);
+
   GtkWidget *fullscreen = toolbar_button ("view-fullscreen-symbolic", "Fullscreen (F)");
   g_signal_connect (fullscreen, "clicked", G_CALLBACK (on_fullscreen_clicked), self);
 
@@ -1706,6 +1825,7 @@ build_toolbar (App *self)
 
   gtk_box_append (GTK_BOX (bar), self->record_button);
   gtk_box_append (GTK_BOX (bar), self->record_time);
+  gtk_box_append (GTK_BOX (bar), self->live_status);
   gtk_box_append (GTK_BOX (bar), update);
   gtk_box_append (GTK_BOX (bar), fullscreen);
   gtk_box_append (GTK_BOX (bar), quit);
@@ -1826,6 +1946,8 @@ shutdown_app (GtkApplication *app, gpointer user_data)
     gst_object_unref (self->pipeline);
     self->pipeline = NULL;
   }
+  /* The kept TURN block. One reference, replaced on every "joined". */
+  g_clear_pointer (&self->turn, json_object_unref);
 }
 
 int
@@ -1983,8 +2105,50 @@ main (int argc, char *argv[])
    *
    * Set rather than overridden, so GDK_DEBUG from the environment still wins;
    * gdk_pre_parse reads it with g_getenv at gtk_init time, which is why it has
-   * to be here and not in harden_environment's neighbourhood by accident. */
+   * to be here and not in harden_environment's neighbourhood by accident.
+   *
+   * And on Windows only where a D3D11 device can actually be made, because on a
+   * machine where one cannot this flag is not free. gdk_win32_display_init_dcomp
+   * (gdk/win32/gdkdisplay-win32.c:512 in 4.24.0) returns early while the flag is
+   * off, and otherwise goes straight to
+   *   hr_warn (ID3D11Device_QueryInterface (self->d3d11_device, ...));
+   * with no null test -- and hr_warn only logs. self->d3d11_device is NULL both
+   * when gdk_win32_display_init_d3d fails outright, which its call site at :783
+   * logs and walks past, and when it succeeds through either of the two
+   * D3D12-only terms of its chain at :544, which pass NULL for the D3D11 slot.
+   * Measured on the shipped bundle: GDK_DISABLE=d3d11,d3d12 segfaults inside
+   * gtk_init, and so does GDK_DISABLE=d3d11 alone, where init_d3d returns TRUE
+   * and logs nothing. With the flag suppressed the same run reaches
+   * "Using renderer 'GskCairoRenderer'" and mirrors, slowly. Probed through
+   * GetProcAddress so nothing new is linked; BGRA_SUPPORT and
+   * hardware-before-WARP are what gdk_win32_display_create_d3d_devices asks for.
+   * This is a proxy for GTK's own adapter walk, not the same test. */
+#ifdef G_OS_WIN32
+  {
+    HMODULE d3d11 = LoadLibraryW (L"d3d11.dll");
+    PFN_D3D11_CREATE_DEVICE create = d3d11
+        ? (PFN_D3D11_CREATE_DEVICE) (void *) GetProcAddress (d3d11, "D3D11CreateDevice")
+        : NULL;
+    ID3D11Device *probe = NULL;
+    if (create &&
+        (SUCCEEDED (create (NULL, D3D_DRIVER_TYPE_HARDWARE, NULL,
+                            D3D11_CREATE_DEVICE_BGRA_SUPPORT, NULL, 0,
+                            D3D11_SDK_VERSION, &probe, NULL, NULL)) ||
+         SUCCEEDED (create (NULL, D3D_DRIVER_TYPE_WARP, NULL,
+                            D3D11_CREATE_DEVICE_BGRA_SUPPORT, NULL, 0,
+                            D3D11_SDK_VERSION, &probe, NULL, NULL))))
+      {
+        ID3D11Device_Release (probe);
+        g_setenv ("GDK_DEBUG", "dcomp", FALSE);
+      }
+    else
+      g_message ("no Direct3D 11 device: painting on the CPU");
+    if (d3d11)
+      FreeLibrary (d3d11);
+  }
+#else
   g_setenv ("GDK_DEBUG", "dcomp", FALSE);
+#endif
 
   gtk_init ();
 
