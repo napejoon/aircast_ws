@@ -17,6 +17,7 @@ import android.net.LocalServerSocket
 import android.net.LocalSocket
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Surface
@@ -38,6 +39,7 @@ class UsbCastService : Service() {
     private var codec: MediaCodec? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var serverSocket: LocalServerSocket? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     @Volatile
     private var running = false
@@ -61,6 +63,7 @@ class UsbCastService : Service() {
             // action exists so that call has somewhere to stand.
             ACTION_HOLD -> {
                 startForegroundWithNotification("Casting this screen")
+                keepScreenOn()
                 // Only now is getMediaProjection() legal. The plugin waits for
                 // this before answering Dart, because startForegroundService()
                 // returns before onStartCommand has run, and a getDisplayMedia
@@ -75,6 +78,7 @@ class UsbCastService : Service() {
 
     private fun start(intent: Intent) {
         startForegroundWithNotification()
+        keepScreenOn()
 
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val data = intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA) ?: return stopSelf()
@@ -206,6 +210,31 @@ class UsbCastService : Service() {
         }
     }
 
+    /**
+     * Android stops a MediaProjection the moment the screen locks, and a tablet
+     * left alone locks in under a minute. The first fix was FLAG_KEEP_SCREEN_ON
+     * on the app's own window, which holds only while that window is visible —
+     * and the user leaves it at once, because what they want mirrored is some
+     * other app. The screen then timed out behind our back, the projection
+     * stopped, and the desktop froze on the last frame with no error anywhere.
+     *
+     * A screen wake lock is the one thing a service can hold that keeps the
+     * screen on regardless of which window is in front. Deprecated since API 17
+     * in favour of the window flag, for the ordinary case where the window flag
+     * is enough; it is still honoured, and this is the case it is not. DIM, not
+     * BRIGHT: capture reads the framebuffer, not the backlight, so a dimmed
+     * screen mirrors just as well and costs less battery.
+     */
+    @Suppress("DEPRECATION")
+    private fun keepScreenOn() {
+        if (wakeLock != null) return
+        val power = getSystemService(PowerManager::class.java)
+        wakeLock = power.newWakeLock(
+            PowerManager.SCREEN_DIM_WAKE_LOCK or PowerManager.ON_AFTER_RELEASE,
+            "aircast:cast",
+        ).also { it.acquire() }
+    }
+
     @Suppress("DEPRECATION")
     private fun displayMetrics(): DisplayMetrics {
         val metrics = DisplayMetrics()
@@ -216,6 +245,8 @@ class UsbCastService : Service() {
 
     private fun stopCasting() {
         running = false
+        wakeLock?.takeIf { it.isHeld }?.release()
+        wakeLock = null
         runCatching { serverSocket?.close() }
         virtualDisplay?.release()
         codec?.runCatching { stop() }

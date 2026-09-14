@@ -6,7 +6,6 @@ import android.content.Intent
 import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.os.Build
-import android.view.WindowManager
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
@@ -86,17 +85,16 @@ class UsbCastPlugin(
                     }
                 }
                 handler.postDelayed(timeout, 5_000)
-                // Android stops a MediaProjection the moment the screen locks, and a
-                // tablet left alone locks in under a minute. Casting is the one
-                // activity where a screen that stays on is the point.
-                activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                // Keeping the screen on — Android stops a projection when it
+                // locks — is the service's job (UsbCastService.keepScreenOn): a
+                // flag on this window held only while this window was in front,
+                // and the user leaves it at once to show some other app.
                 activity.startForegroundService(
                     Intent(activity, UsbCastService::class.java).setAction(UsbCastService.ACTION_HOLD)
                 )
             }
 
             "stop" -> {
-                activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 activity.startService(
                     Intent(activity, UsbCastService::class.java).setAction(UsbCastService.ACTION_STOP)
                 )

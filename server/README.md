@@ -34,7 +34,8 @@ is the same string as coturn's `static-auth-secret`:
 AIRCAST_TURN_SECRET=<coturn static-auth-secret>
 AIRCAST_TURN_URLS=turn:relay.example.com:3478?transport=udp,turns:relay.example.com:5349?transport=tcp
 AIRCAST_PORT=8443
-AIRCAST_TTL=300
+AIRCAST_TTL=300          # pairing code
+AIRCAST_TURN_TTL=43200   # TURN credential: must outlive the longest session, not the code
 ```
 
 `ProtectSystem=strict` in the unit means `/opt/aircast` is read-only to the

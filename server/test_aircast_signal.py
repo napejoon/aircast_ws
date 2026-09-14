@@ -31,7 +31,7 @@ async def strict_endpoint():
 
 
 async def _endpoint(max_misses):
-    server = Server(SECRET, URLS, ttl=300, max_misses=max_misses)
+    server = Server(SECRET, URLS, ttl=300, max_misses=max_misses, turn_ttl=43200)
     async with serve(server.handle, "127.0.0.1", 0) as ws_server:
         port = ws_server.sockets[0].getsockname()[1]
         yield f"ws://127.0.0.1:{port}"
@@ -54,6 +54,18 @@ def test_turn_credentials_match_coturns_construction():
     assert int(expiry) > time.time()
     expected = hmac.new(SECRET.encode(), cred["username"].encode(), hashlib.sha1).digest()
     assert cred["credential"] == base64.b64encode(expected).decode()
+
+
+@pytest.mark.asyncio
+async def test_the_turn_credential_outlives_the_pairing_window(endpoint):
+    # coturn checks the timestamp on every refresh, not only on the first
+    # allocation. A credential that died with the 300 s pairing window took the
+    # relay allocation down with it five minutes into a working mirror.
+    ws = await join(endpoint, "654321", "receiver")
+    joined = await recv(ws)
+    expiry, _, _ = joined["turn"]["username"].partition(":")
+    assert int(expiry) > time.time() + 3600
+    await ws.close()
 
 
 @pytest.mark.asyncio

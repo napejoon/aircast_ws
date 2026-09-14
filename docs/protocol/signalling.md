@@ -34,8 +34,12 @@ goes first.
 4. Mint TURN REST credentials per pairing and send them in `joined`:
    `username = "<expiry-unix>:<opaque-id>"`,
    `credential = base64(HMAC-SHA1(username, static-auth-secret))`, with the
-   shared secret read from `/etc/aircast/signal.env`. Expiry ≈ the pairing
-   window; it is unrelated to coturn's `stale-nonce`.
+   shared secret read from `/etc/aircast/signal.env`. Expiry must outlive the
+   longest *session*, not the pairing window (`AIRCAST_TURN_TTL`, default 12 h):
+   coturn re-checks the timestamp on every allocation and permission refresh,
+   so a credential tied to the 300 s pairing window killed the relay
+   allocation five minutes into a working mirror. It is unrelated to coturn's
+   `stale-nonce`.
 5. Expire the code and drop the buffered offer on connect or on a short TTL.
 
 ## Client obligations

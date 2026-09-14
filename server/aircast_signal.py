@@ -12,7 +12,8 @@ shared secret never appears in the unit file or in `ps`:
     AIRCAST_TURN_URLS     comma-separated turn: URLs             (required)
     AIRCAST_BIND          default 127.0.0.1                      (behind nginx/caddy)
     AIRCAST_PORT          default 8443
-    AIRCAST_TTL           pairing + credential lifetime, seconds (default 300)
+    AIRCAST_TTL           pairing-code lifetime, seconds                (default 300)
+    AIRCAST_TURN_TTL      TURN credential lifetime, seconds             (default 43200)
     AIRCAST_MAX_MISSES    failed joins per IP per minute before refusal (default 10)
 """
 
@@ -87,10 +88,22 @@ class Pairing:
 
 
 class Server:
-    def __init__(self, secret: str, urls: list[str], ttl: int, max_misses: int = 10) -> None:
+    def __init__(
+        self, secret: str, urls: list[str], ttl: int, max_misses: int = 10, turn_ttl: int = 43200
+    ) -> None:
         self.secret = secret
         self.urls = urls
         self.ttl = ttl
+        # Not the pairing TTL. The timestamp in a REST username is checked by
+        # coturn on every authenticated request, not only the first: the
+        # allocation refresh and the permission refresh both carry it, and the
+        # peers keep sending those for as long as the screen is mirrored. With
+        # the two lifetimes shared, a credential minted at join expired five
+        # minutes later, the next refresh got 401, coturn dropped the
+        # allocation, and the picture froze mid-session. This has to outlive the
+        # longest session anyone will sit through, and no more than that: it is
+        # also how long a leaked credential can burn relay bandwidth.
+        self.turn_ttl = turn_ttl
         # A 6-digit code is a guessable space, so the throttle is the defence
         # (issue #6): a client that keeps naming codes nobody is waiting on
         # stops being answered.
@@ -168,7 +181,7 @@ class Server:
 
         await ws.send(json.dumps({
             "type": "joined",
-            "turn": turn_credentials(self.secret, self.urls, self.ttl),
+            "turn": turn_credentials(self.secret, self.urls, self.turn_ttl),
         }))
 
         other = ROLES[0] if role == ROLES[1] else ROLES[1]
@@ -248,6 +261,7 @@ async def main() -> None:
         urls,
         int(os.environ.get("AIRCAST_TTL", "300")),
         int(os.environ.get("AIRCAST_MAX_MISSES", "10")),
+        turn_ttl=int(os.environ.get("AIRCAST_TURN_TTL", "43200")),
     )
     host = os.environ.get("AIRCAST_BIND", "127.0.0.1")
     port = int(os.environ.get("AIRCAST_PORT", "8443"))

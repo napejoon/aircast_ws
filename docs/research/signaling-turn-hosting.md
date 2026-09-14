@@ -76,9 +76,14 @@ Three mechanisms, from coturn's own docs:
 **So credentials are minted, never stored.** When the signalling server pairs the two peers on a 6-digit code,
 it computes `username = "<expiry-unix-timestamp>:<opaque-id>"` and
 `password = base64(HMAC-SHA1(username, static-auth-secret))`, and hands the same triplet (TURN URL, username,
-password) to both peers. The credential's lifetime *is* the embedded timestamp — set it to roughly the
-pairing code's own validity window. Note `--stale-nonce` (default 600 s) is a different thing entirely: it is
-the TURN protocol's nonce-refresh interval, not the credential expiry, and conflating the two is an easy bug.
+password) to both peers. The credential's lifetime *is* the embedded timestamp — ~~set it to roughly the
+pairing code's own validity window~~. **Correction (2026-09-13):** that was wrong, and it shipped. coturn checks
+the timestamp on every authenticated request, not only the first Allocate — the allocation refresh and the
+permission refresh both carry it — so a credential that expired with the 300 s pairing window took a working
+relay allocation down five minutes into the session. Set it to the longest session anyone will sit through
+(`AIRCAST_TURN_TTL`, default 12 h); the pairing code keeps its own short TTL. Note `--stale-nonce` (default
+600 s) is a different thing entirely: it is the TURN protocol's nonce-refresh interval, not the credential
+expiry, and conflating the two is an easy bug.
 
 Honest note on standing: the REST scheme is described only in `draft-uberti-behave-turn-rest-00`, an
 individual Internet-Draft from July 2013 that never advanced past `-00`, has no RFC number and was never
