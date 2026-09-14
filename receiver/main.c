@@ -56,9 +56,11 @@ typedef struct {
   gchar *signal_url;
   gchar *code;
   gchar *record_dir;
-  /* Negative until something settles it: --latency on the command line, or
-   * choose_latency() from the pair ICE selected. */
+  /* What the user typed, or negative if they typed nothing. choose_latency()
+   * never writes here: its answer lives in latency_chosen, so a second cast
+   * over a different path is free to reach a different one. */
   gint latency_ms;
+  gint latency_chosen;
   gboolean relay_only;
   gboolean insecure;
   gboolean selftest;
@@ -933,14 +935,25 @@ attach_paintable (gpointer data)
  * is holding, so the choice belongs here and not in a flag somebody has to
  * remember before double-clicking a shortcut.
  *
- * Both numbers were walked by hand on this deployment, one value per cast. On a
- * direct pair 60 ms and 40 ms were each clean on all four counters that matter,
- * no packets lost, no keyframe requests, no discont, no sink overruns, and were
- * indistinguishable to watch. 20 ms broke it outright: gtk4paintablesink logged
- * "Have too many pending frames" 581 times, gstvideodecoder logged "Dropping
- * frame due to QoS" 37 times, and the H.264 decoder logged "Invalid frame num,
- * maybe frame drop" 11 times. So the floor is between 20 and 40, and 60 is the
- * tested value with a whole step of margin under it. That margin is nearly
+ * Both numbers were walked by hand on this deployment, one value per cast, and
+ * what the logs hold is a gradient rather than a cliff. Each run states its own
+ * value, as the gap between the new jitterbuffer and its first deadline
+ * timeout: 60.1 ms in receiver12, 40.8 in receiver13, 29.7 in receiver14, 60.6
+ * in receiver15, 197.7 in the relayed receiver10. Counted over the same 80
+ * seconds after that jitterbuffer in each, the sink's "Have too many pending
+ * frames" and the decoder's "Dropping frame due to QoS" do not follow the
+ * number at all: 597 and 49 at 60 ms, 321 and 18 at 60 ms again on a longer
+ * run, 372 and 37 at 40, 575 and 35 at 20. Two casts at the same 60 differ more
+ * than 60 differs from 20, so those two counters are measuring this machine and
+ * not the buffer. The one that does follow it is the H.264 decoder's "Invalid
+ * frame num N, maybe frame drop", which is a real hole in the stream: 0 and 2
+ * at 60 ms, 5 at 40, and 16 across the whole 20 ms run. Nothing here says
+ * anything about lost packets, keyframe requests or discont, because the
+ * jitterbuffer logs those at GST_DEBUG and every one of these runs was captured
+ * at WARN, so a grep for them returns zero only because the category was never
+ * recorded. What is known, then: 60 is the lowest value measured that cost no
+ * visible frame gaps, the user could not tell it from 40, and 20 roughly
+ * triples the gaps. That margin is nearly
  * free: the 20 ms it gives up against 40 is invisible inside a 70-80 ms
  * glass-to-glass budget, and the direct round trip it covers is 3 ms. The relay
  * keeps 200, for the reasons set out in main().
@@ -984,6 +997,7 @@ choose_latency (App *self, GstPad *pad)
   GstPromise *promise;
   const GstStructure *reply = NULL;
   guint candidates = 0, host = 0;
+  gint chosen;
 
   /* --latency is an override and turns the choice off. It doubles as the
    * fired-once guard: the number chosen below goes into the same field, so a
@@ -1025,13 +1039,24 @@ choose_latency (App *self, GstPad *pad)
    * everything that went wrong: no reply, a reply carrying an error instead of
    * a report, or a transport with no selected pair yet. All of those count zero
    * and leave the number where build_pipeline put it. */
-  self->latency_ms = (candidates > 0 && host == candidates)
+  /* The answer goes to webrtcbin and to latency_chosen, never back into
+   * latency_ms, which holds only what the user typed. Writing it there would
+   * make the guard above fire for the rest of the process, and a phone that
+   * rejoins over the relay after a direct cast would keep 60 ms on a path whose
+   * retransmissions need 142 ms at the median, which is the regime main()
+   * describes below 150. build_pipeline runs once per process and a bye does
+   * not tear the pipeline down, so that second cast is a real case. Asking
+   * again per pad costs one more promise and is idempotent. */
+  chosen = (candidates > 0 && host == candidates)
       ? AIRCAST_LATENCY_DIRECT : AIRCAST_LATENCY_RELAY;
-  g_object_set (self->webrtc, "latency", (guint) self->latency_ms, NULL);
+  if (chosen == self->latency_chosen)
+    return;
+  self->latency_chosen = chosen;
+  g_object_set (self->webrtc, "latency", (guint) chosen, NULL);
   /* One line on stderr, because this is now a number nobody typed and the
    * receiver's own log is the only place it can be read back. */
-  g_printerr ("jitter buffer: %d ms (%s)\n", self->latency_ms,
-      self->latency_ms == AIRCAST_LATENCY_DIRECT
+  g_printerr ("jitter buffer: %d ms (%s)\n", chosen,
+      chosen == AIRCAST_LATENCY_DIRECT
           ? "ICE selected a host pair"
           : "relayed, reflexive or unknown path");
 }
