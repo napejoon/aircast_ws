@@ -102,13 +102,27 @@ renews. On the deployed server that was two unrelated websites, three times a
 quarter, each one ending every cast in flight. Match the lineage:
 
 ```bash
-cat >/etc/letsencrypt/renewal-hooks/deploy/coturn.sh <<'EOF'
+cat >/etc/letsencrypt/renewal-hooks/deploy/aircast.sh <<'EOF'
 #!/bin/sh
+# nginx reads the certificate once, at start, so a renewal that nothing reloads
+# is a renewal no client ever sees. The reload is unconditional: every site on
+# this box is served by the same nginx. The coturn restart is not -- it drops
+# every TURN allocation, which ends every cast in flight, so it happens only
+# when it is our own certificate that moved.
 case "$RENEWED_LINEAGE" in
   */<TURN_DOMAIN>) systemctl restart coturn ;;
 esac
+systemctl reload nginx
 EOF
-chmod +x /etc/letsencrypt/renewal-hooks/deploy/coturn.sh
+# Substitute the placeholder. Left as <TURN_DOMAIN> the case never matches and
+# coturn quietly keeps serving the expired certificate until someone restarts it
+# by hand.
+sed -i "s|<TURN_DOMAIN>|$TURN_DOMAIN|" /etc/letsencrypt/renewal-hooks/deploy/aircast.sh
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/aircast.sh
+# Every executable file in that directory runs on every renewal, this one
+# included, so a backup copy left beside it is a second hook -- and a backup of
+# an older version is the older behaviour, back again.
+ls /etc/letsencrypt/renewal-hooks/deploy/
 ```
 
 ## 3. coturn config
@@ -199,8 +213,8 @@ Open exactly these. The relay range must match `min-port`/`max-port` in the conf
 | 3478 | TCP + UDP | STUN/TURN |
 | 5349 | TCP + UDP | TURN over TLS / DTLS |
 | 49160-49360 | UDP | relay range (**keep in sync with the config**) |
-| 80 | TCP | certbot standalone renewals |
-| *signalling port* | TCP | once the Rust server exists (put it behind TLS) |
+| 80 | TCP | ACME http-01 challenges, and the redirect to https |
+| 443 | TCP | nginx: the signalling WebSocket, every other site on this box, and TURNS-over-443 from section 7 |
 
 **Do not open** 9641 (Prometheus — not even compiled into Ubuntu's build) or 5766 (admin CLI).
 
@@ -212,6 +226,14 @@ ufw allow 3478/udp
 ufw allow 5349/tcp
 ufw allow 5349/udp
 ufw allow 49160:49360/udp
+# Not optional and not "later". `ufw --force enable` below sets deny-incoming,
+# so a run without this line closes 443 in the same second it opens the relay
+# range: every other site on this box stops answering, the signalling WebSocket
+# stops answering, and section 7's TURNS-over-443 — the one port a university
+# network leaves open — is shut before it is ever used. The signalling server
+# itself binds 127.0.0.1:8443 and must never be opened; nginx is the only thing
+# that reaches it.
+ufw allow 443/tcp
 # --force: ufw(8) otherwise prompts, and under ssh the next pasted line gets
 # eaten as the answer — the firewall silently stays off
 ufw --force enable
@@ -351,6 +373,28 @@ It needs two more variables in the same env file, and they are not secrets — o
 TLS is terminated by nginx, not by the server — it binds `127.0.0.1:8443` and speaks plain `ws://`, so
 nothing else needs the certificate's private key. Install `ops/nginx-aircast-signal.conf.template` with
 `SIGNAL_DOMAIN` replaced, and open 443/tcp in the firewall alongside section 4's rules.
+
+Then re-issue the certificate once, through the webroot nginx serves. Section 2 used `--standalone`,
+which binds port 80 itself; nginx owns port 80 from here on, so a standalone renewal can only fail — and
+it fails around day 60, inside a systemd timer, with nothing on any console. Re-issuing rewrites
+`authenticator` and `webroot_path` in the lineage's renewal config, and every later `certbot renew`
+follows what is written there:
+
+```bash
+# The -w path and nginx's own root must be the same directory. They are the two
+# halves nothing checks for you: certbot writes the token under -w, and nginx
+# looks for it under root plus the request URI.
+certbot certonly --webroot -w /var/www/html \
+        --cert-name <TURN_DOMAIN> -d <TURN_DOMAIN> -d <SIGNAL_DOMAIN>
+grep -E 'authenticator|webroot_path' /etc/letsencrypt/renewal/<TURN_DOMAIN>.conf
+
+# The only check that exercises the path a renewal actually takes, with nginx
+# up. Run it now, and again after any change to the port 80 block.
+certbot renew --dry-run
+```
+
+A renewed certificate is not a served certificate: nginx reads the file once, at start. The deploy hook
+in section 2 reloads it, and that reload is the step that makes the new certificate reach a client.
 
 **The proxy must set `X-Forwarded-For`** (the template does). The server throttles code-guessing by client IP
 and trusts that header only from loopback; without it every client shares one bucket and the first ten misses

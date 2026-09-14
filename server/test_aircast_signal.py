@@ -143,14 +143,21 @@ async def test_a_sender_guessing_codes_is_cut_off(strict_endpoint):
 
 
 @pytest.mark.asyncio
-async def test_a_receiver_arriving_first_is_not_charged_a_miss(strict_endpoint):
-    # The receiver invents the code and displays it, so it is always first and
-    # its code is never already waiting. Charging it spent the program's own
-    # budget on starting up.
-    for code in ("111111", "222222", "333333"):
+async def test_a_receiver_walking_codes_is_cut_off_too(strict_endpoint):
+    # Every join costs, whichever role asks. Charging only the side that has to
+    # guess left the other one free: joining as a receiver answers "that role is
+    # already taken" for a code somebody is waiting on and "joined" for the rest,
+    # which is the oracle the throttle exists to deny, and each of those joins
+    # mints a TURN credential besides. An honest receiver spends one attempt per
+    # start of the program, out of ten a minute.
+    for code in ("111111", "222222"):
         ws = await join(strict_endpoint, code, "receiver")
         assert (await recv(ws))["type"] == "joined"
         await ws.close()
+
+    ws = await join(strict_endpoint, "333333", "receiver")
+    assert (await recv(ws))["type"] == "error"
+    await ws.close()
 
 
 @pytest.mark.asyncio

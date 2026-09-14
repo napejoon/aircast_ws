@@ -219,7 +219,14 @@ class CastSession {
       await track.stop();
     }
     await _stream?.dispose();
+    // close() then dispose(), because in flutter_webrtc they are not the same
+    // thing. close() stops the transports; dispose() is what cancels the Dart
+    // event subscription and frees the native PeerConnection. Without the
+    // second call every start and stop in one app run leaves a native
+    // connection behind, and the handler still subscribed still points at
+    // onState, which points at _stop, on a session the UI has replaced.
     await _pc?.close();
+    await _pc?.dispose();
     _stream = null;
     _pc = null;
     // The notification outlives the capture, not the other way round. A no-op

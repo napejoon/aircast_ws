@@ -25,4 +25,13 @@ class UsbCast {
 
   /// Stops the capture and releases the service, on either path.
   static Future<void> stop() => _channel.invokeMethod('stop');
+
+  /// Android ending the capture without being asked: consent revoked from the
+  /// cast chip, another app taking the projection, the screen locking. Until
+  /// this existed the UI went on showing a live cast that had already stopped,
+  /// which is the one thing a mirroring app must not get wrong.
+  static set onStopped(void Function() handler) =>
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'stopped') handler();
+      });
 }

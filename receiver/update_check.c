@@ -140,6 +140,15 @@ int
 aircast_manifest_verify (const char *manifest, gsize mlen,
                          const char *sig, gsize slen)
 {
+  /* libsodium's contract is that sodium_init() runs before anything else in the
+   * library, and the only places that honoured it were the two selftests. The
+   * path that verifies a real release manifest walked straight into
+   * crypto_generichash. It is idempotent, and this is the one door every
+   * verification goes through, so it belongs here rather than repeated in each
+   * caller. A failure is a refusal: a verifier that could not initialise must
+   * never be the thing that answers "signature OK". */
+  if (sodium_init () < 0)
+    return -1;
   if (!aircast_update_key_configured ())
     return -1;
   return manifest_verify_with_key (manifest, mlen, sig, slen, AIRCAST_UPDATE_PK);

@@ -100,6 +100,10 @@ typedef struct {
 
   guint hide_source;
   guint record_timer;
+  /* The 700 ms the muxer gets to close its file. Kept so a session that ends
+   * inside that window can cancel it rather than let it fire into a pipeline
+   * that has been freed. */
+  guint record_drop_timer;
   gint64 record_started;
   gboolean recording;
 } App;
@@ -164,6 +168,9 @@ static void on_pad_added (GstElement *webrtc, GstPad *pad, App *self);
 static void send_json (App *self, JsonBuilder *builder);
 static void set_status (App *self, const gchar *text);
 static void stop_recording (App *self);
+/* Ends a media session without ending the signalling one: defined below, next
+ * to the teardown it shares with a lost socket. */
+static void drop_session (App *self);
 
 /* ----------------------------------------------------------------- interface */
 
@@ -262,13 +269,19 @@ start_recording (App *self)
   if (self->recording || !self->tee || !self->record_mux)
     return;
 
-  gchar *stamp = g_date_time_format_iso8601 (g_date_time_new_now_local ());
+  /* g_build_filename copies its arguments, so the printed name has an owner
+   * here and nowhere else, and the GDateTime the stamp came out of has one
+   * too. Both were leaked on every recording. */
+  GDateTime *now = g_date_time_new_now_local ();
+  gchar *stamp = g_date_time_format_iso8601 (now);
+  g_date_time_unref (now);
   g_strdelimit (stamp, ":", '-');
+  gchar *name = g_strdup_printf ("aircast-%s.mkv", stamp);
+  g_free (stamp);
   g_free (self->record_file);
   self->record_file = g_build_filename (
-      self->record_dir ? self->record_dir : g_get_home_dir (),
-      g_strdup_printf ("aircast-%s.mkv", stamp), NULL);
-  g_free (stamp);
+      self->record_dir ? self->record_dir : g_get_home_dir (), name, NULL);
+  g_free (name);
 
   gchar *escaped = g_strescape (self->record_file, NULL);
   gchar *desc = g_strdup_printf (
@@ -293,6 +306,21 @@ start_recording (App *self)
   gst_pad_link (self->record_tee_pad, sink);
   gst_object_unref (sink);
 
+  /* Ask the phone for a keyframe now. The branch is grafted on wherever the
+   * stream happens to be, and libwebrtc emits an IDR only at stream start or on
+   * a PLI -- the same fact rtph264depay's request-keyframe exists for. Without
+   * one the branch's h264parse has no SPS/PPS to build the codec_data
+   * matroskamux needs, so the file stays empty until some unrelated packet loss
+   * orders a keyframe. On a clean direct pair that can be the whole recording,
+   * and the teardown still reports it saved. Built by hand rather than with
+   * gst_video_event_new_upstream_force_key_unit so this does not drag
+   * gstreamer-video-1.0 into the link line: the structure name is the whole
+   * contract, and rtpsession supplies the fields it does not find. */
+  gst_element_send_event (self->pipeline,
+      gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+          gst_structure_new ("GstForceKeyUnit",
+              "all-headers", G_TYPE_BOOLEAN, TRUE, NULL)));
+
   self->recording = TRUE;
   self->record_started = g_get_monotonic_time ();
   self->record_timer = g_timeout_add_seconds (1, tick_record_time, self);
@@ -309,6 +337,17 @@ static gboolean
 drop_record_branch (gpointer data)
 {
   App *self = data;
+
+  self->record_drop_timer = 0;
+
+  /* drop_session clears all of these and cancels this timer when a session ends
+   * inside the 700 ms, so reaching here with no branch means the pipeline went
+   * first and the muxer never got to write its index. Saying "Saved" then would
+   * be telling the user a truncated file is on disk. */
+  if (!self->record_branch && !self->record_tee_pad) {
+    set_status (self, "The recording was interrupted and may be incomplete");
+    return G_SOURCE_REMOVE;
+  }
 
   if (self->record_branch) {
     gst_element_set_state (self->record_branch, GST_STATE_NULL);
@@ -340,7 +379,7 @@ unlink_record_branch (GstPad *pad, GstPadProbeInfo *info, gpointer data)
   /* ponytail: fixed 700 ms for the muxer to finish instead of waiting for the
    * branch's own EOS message. Swap in a bus watch on the branch if a long
    * recording ever comes out truncated. */
-  g_timeout_add (700, drop_record_branch, self);
+  self->record_drop_timer = g_timeout_add (700, drop_record_branch, self);
   return GST_PAD_PROBE_REMOVE;
 }
 
@@ -371,6 +410,19 @@ on_record_toggled (GtkToggleButton *button, App *self)
     if (!self->tee) {
       gtk_toggle_button_set_active (button, FALSE);
       set_status (self, "Nothing to record yet");
+      return;
+    }
+    /* stop_recording clears self->recording at once, but it hands the branch to
+     * a pad probe and a 700 ms timer, and record_branch stays set until that
+     * timer has pulled it out of the pipeline. Starting again inside that window
+     * overwrites the pointer, and the timer then removes the *new* branch
+     * instead: a red dot and a running clock over a file that stopped 700 ms in,
+     * and the old branch left in the pipeline for good. Two presses in under a
+     * second is all it takes, so the second one is refused rather than
+     * half-honoured. */
+    if (self->record_branch) {
+      gtk_toggle_button_set_active (button, FALSE);
+      set_status (self, "Still closing the last recording. Try again in a moment");
       return;
     }
     start_recording (self);
@@ -528,6 +580,15 @@ on_ice_candidate (GstElement *webrtc, guint mline, gchar *candidate, App *self)
   send_json (self, b);
 }
 
+/* From an idle source, because on_connection_state runs on a webrtcbin task
+ * thread and everything drop_session touches belongs to the main one. */
+static gboolean
+drop_session_idle (gpointer data)
+{
+  drop_session (data);
+  return G_SOURCE_REMOVE;
+}
+
 /* Relay-only ICE either works or fails; without this the window would sit on
  * the idle card forever when the relay is unreachable. */
 static void
@@ -538,8 +599,23 @@ on_connection_state (GstElement *webrtc, GParamSpec *pspec, App *self)
 
   if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED)
     post_ui (self, "Connected", NULL);
-  else if (state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED)
+  else if (state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED) {
     post_ui (self, "The connection failed — is the TURN relay reachable?", "idle");
+    /* Saying so was never enough. webrtcbin goes on sending on a transport
+     * whose consent the peer has revoked: receiver16.gst.log holds 180 of those
+     * over the fourteen minutes after it reported this very state, receiver15
+     * holds 489 over forty. And that finished webrtcbin is the one the next
+     * offer would be negotiated on, because build_pipeline runs only when a
+     * join is answered, and the server answers a join once per socket.
+     *
+     * The signalling socket is left alone on purpose. Dropping it would make
+     * the server replay the offer it has buffered for this pairing to the
+     * rejoining receiver, and the phone cannot take a second answer for an
+     * offer it has already had one for. From an idle source, because this runs
+     * on a webrtcbin task thread and everything drop_session touches belongs to
+     * the main one. */
+    g_idle_add (drop_session_idle, self);
+  }
 }
 
 /* The only place a pipeline failure has ever been able to say anything. An
@@ -754,6 +830,34 @@ build_pipeline (App *self, JsonObject *turn)
   return TRUE;
 }
 
+typedef struct {
+  App *self;
+  gchar *text;
+} Outgoing;
+
+static gboolean
+send_text (gpointer data)
+{
+  Outgoing *out = data;
+
+  if (out->self->ws &&
+      soup_websocket_connection_get_state (out->self->ws) == SOUP_WEBSOCKET_STATE_OPEN)
+    soup_websocket_connection_send_text (out->self->ws, out->text);
+
+  g_free (out->text);
+  g_free (out);
+  return G_SOURCE_REMOVE;
+}
+
+/* Two of send_json's three callers are not on the main thread: on_ice_candidate,
+ * for every candidate webrtcbin trickles, and the answer, sent from the
+ * create-answer promise. Both are webrtcbin task threads.
+ * SoupWebsocketConnection belongs to the context it was created on -- its
+ * outgoing frames are a bare GQueue with no lock and its output source is
+ * attached there -- and on_ws_closed can clear self->ws on the main thread in
+ * between the test and the send. So the text crosses over the way post_ui
+ * already makes status text cross over, which also puts the state check next to
+ * the send instead of a thread switch away from it. */
 static void
 send_json (App *self, JsonBuilder *builder)
 {
@@ -762,10 +866,11 @@ send_json (App *self, JsonBuilder *builder)
   json_generator_set_root (gen, root);
   gchar *text = json_generator_to_data (gen, NULL);
 
-  if (self->ws)
-    soup_websocket_connection_send_text (self->ws, text);
+  Outgoing *out = g_new0 (Outgoing, 1);
+  out->self = self;
+  out->text = text;             /* ownership moves to send_text */
+  g_idle_add (send_text, out);
 
-  g_free (text);
   json_node_free (root);
   g_object_unref (gen);
   g_object_unref (builder);
@@ -805,6 +910,17 @@ static void
 on_offer (App *self, const gchar *sdp_text)
 {
   GstSDPMessage *sdp = NULL;
+
+  /* build_pipeline failed and on_message dropped its answer on the floor. Both
+   * its failure paths leave webrtcbin NULL, and without this the two
+   * g_signal_emit_by_name calls below are criticals on stderr while
+   * "Negotiating" writes over the sentence that said what went wrong: a window
+   * stuck for good on a word that is not true. */
+  if (!self->webrtc) {
+    set_status (self, "No media pipeline, so this build cannot take the cast. "
+        "See the terminal, and receiver/README.md");
+    return;
+  }
 
   if (!sdp_text || gst_sdp_message_new_from_text (sdp_text, &sdp) != GST_SDP_OK) {
     set_status (self, "The sender's offer is not valid SDP");
@@ -852,6 +968,10 @@ on_message (SoupWebsocketConnection *ws, gint type, GBytes *bytes, App *self)
     stop_recording (self);
     show_page (self, "idle");
     set_status (self, "The phone stopped casting");
+    /* And end it, rather than leaving a finished webrtcbin sending into a
+     * transport the phone has already hung up. This runs on the main thread,
+     * so it can call drop_session directly. */
+    drop_session (self);
   } else if (g_str_equal (kind, "error")) {
     /* Never render the server's own words: this label also carries the update
      * notice, and an attacker-controlled string in it is a phishing primitive. */
@@ -888,11 +1008,37 @@ drop_session (App *self)
   if (self->recording)
     stop_recording (self);
   if (self->pipeline) {
+    /* The watch holds a ref on the bus and a GSource on the main context, and
+     * build_pipeline installs a fresh one per session. Left behind, every
+     * reconnect leaks both and the old handler keeps firing for a pipeline
+     * nobody can see. */
+    GstBus *bus = gst_element_get_bus (self->pipeline);
+    gst_bus_remove_watch (bus);
+    gst_object_unref (bus);
     gst_element_set_state (self->pipeline, GST_STATE_NULL);
     gst_object_unref (self->pipeline);
     self->pipeline = NULL;
     self->webrtc = NULL;
   }
+
+  /* Everything the record button holds lived inside that pipeline. tee is a
+   * borrowed pointer into the tail bin that has just been freed, record_branch
+   * belongs to the pipeline, and record_tee_pad's ref outlives the tee that owns
+   * the pad. stop_recording above does not finish the job either: it hands the
+   * branch to a pad probe and a 700 ms timer, both of which expect the pipeline
+   * to still be there. Cancelling that timer and clearing these pointers is what
+   * stops a use-after-free on a bin that no longer exists, and what stops the
+   * next press of the record button asking a freed tee for a pad -- a NULL check
+   * on tee is all on_record_toggled has. */
+  if (self->record_drop_timer) {
+    g_source_remove (self->record_drop_timer);
+    self->record_drop_timer = 0;
+    set_status (self, "The recording was interrupted and may be incomplete");
+  }
+  self->record_branch = NULL;
+  gst_clear_object (&self->record_tee_pad);
+  self->tee = NULL;
+  g_clear_pointer (&self->record_mux, g_free);
   self->latency_chosen = 0;
 }
 
@@ -1573,6 +1719,18 @@ activate (GtkApplication *app, gpointer user_data)
 {
   App *self = user_data;
 
+  /* GtkApplication is single-instance: a second launch on a machine with a
+   * session bus does not start a second process, it re-emits activate here.
+   * Everything below writes into one App struct, so running it twice repoints
+   * the live window's status line and record button at a second window's
+   * widgets, and opens a second signalling socket on a code the server has
+   * already handed us -- which it refuses, and the receiver then loops on that
+   * refusal. The window we already have is the whole answer. */
+  if (self->window) {
+    gtk_window_present (GTK_WINDOW (self->window));
+    return;
+  }
+
   load_css ();
 
   self->window = gtk_application_window_new (app);
@@ -1632,7 +1790,14 @@ shutdown_app (GtkApplication *app, gpointer user_data)
 
   if (self->recording)
     stop_recording (self);
-  if (self->ws)
+  /* Only from OPEN. A close the peer began leaves the connection in CLOSING
+   * with our echo already queued and the "closed" signal not yet emitted, and
+   * calling close() again there is the libsoup CRITICAL
+   * "assertion '!priv->close_sent' failed" that receiver16.err.log caught on
+   * quit. The assertion returns without sending anything, so the tidy close we
+   * came here for is the one thing that does not happen. */
+  if (self->ws &&
+      soup_websocket_connection_get_state (self->ws) == SOUP_WEBSOCKET_STATE_OPEN)
     soup_websocket_connection_close (self->ws, SOUP_WEBSOCKET_CLOSE_NORMAL, NULL);
   if (self->pipeline) {
     /* The watch comes off before the EOS goes in. A bus watch drains every
@@ -1682,7 +1847,10 @@ main (int argc, char *argv[])
    * --latency overrides both numbers and turns the choice off, and it is still
    * worth re-walking: the run that made 120 ms stutter predates every fix
    * since. */
-  App self = { .latency_ms = -1 };
+  /* G_MININT, not -1: -1 is a number the user can type, and the guards below
+   * read this field as "negative means nobody has chosen". Anything reachable
+   * from the command line has to stay out of the sentinel's way. */
+  App self = { .latency_ms = G_MININT };
 
   /* First statement in main(): before gst_init() runs inside the option parse,
    * and before anything can cache a data directory. */
@@ -1723,6 +1891,15 @@ main (int argc, char *argv[])
     return 1;
   }
   g_option_context_free (ctx);
+
+  /* Refused out loud rather than quietly reverting to the automatic choice the
+   * flag was typed to turn off. Zero goes with the negatives: a jitter buffer
+   * with no window calls every reordered packet lost, and the run these numbers
+   * come from reordered 8,234 of 18,065. */
+  if (self.latency_ms != G_MININT && self.latency_ms < 1) {
+    g_printerr ("--latency must be a positive number of milliseconds\n");
+    return 1;
+  }
 
   /* Both exits happen before any window, so CI runs them headless. */
   if (self.selftest)

@@ -23,8 +23,12 @@ class UsbCastPlugin(
     messenger: io.flutter.plugin.common.BinaryMessenger,
 ) : MethodChannel.MethodCallHandler, PluginRegistry.ActivityResultListener {
 
-    private val channel = MethodChannel(messenger, "io.aircast.sender/usb").also {
-        it.setMethodCallHandler(this)
+    private val channel = MethodChannel(messenger, "io.aircast.sender/usb").also { c ->
+        c.setMethodCallHandler(this)
+        // The service is the only thing that hears the platform take the
+        // capture away. onStop is delivered on the main thread, which is the
+        // one a MethodChannel may be answered from.
+        UsbCastService.onStopped = { c.invokeMethod("stopped", null) }
     }
     private var pending: MethodChannel.Result? = null
     private var socketName = "aircast"
@@ -125,7 +129,11 @@ class UsbCastPlugin(
         return true
     }
 
-    fun dispose() = channel.setMethodCallHandler(null)
+    fun dispose() {
+        // Left set, the closure answers on a channel whose engine has gone.
+        UsbCastService.onStopped = null
+        channel.setMethodCallHandler(null)
+    }
 
     private companion object {
         const val REQUEST_CONSENT = 0xA1C

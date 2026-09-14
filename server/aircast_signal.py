@@ -71,10 +71,32 @@ def client_ip(ws: ServerConnection) -> str:
     proxy someone else configures."""
     peer = ws.remote_address[0] if ws.remote_address else "?"
     if peer in ("127.0.0.1", "::1"):
-        forwarded = ws.request.headers.get("X-Forwarded-For") if ws.request else None
+        # get_all, not get: a field that arrives on two lines means exactly what
+        # the same field comma-joined on one line means (RFC 9110), but get() is
+        # Mapping.get and only swallows KeyError, while websockets raises
+        # MultipleValuesError -- a LookupError that is not a KeyError. A second
+        # proxy that adds its own line rather than appending to ours therefore
+        # took the connection down with an unhandled exception and a 1011
+        # instead of being read. The last element of the last line is the same
+        # rule as before: the nearest proxy's word for who this is.
+        forwarded = ws.request.headers.get_all("X-Forwarded-For") if ws.request else []
         if forwarded:
-            return forwarded.split(",")[-1].strip()
+            return forwarded[-1].split(",")[-1].strip()
     return peer
+
+
+async def _still_there(ws: ServerConnection) -> bool:
+    """Is anyone actually on the other end of this socket?
+
+    A peer that walked out of range sends no close frame and no FIN, so the
+    socket stays open on this side and the only way to find out is to ask and
+    wait a moment for the answer.
+    """
+    try:
+        await asyncio.wait_for(await ws.ping(), timeout=2)
+    except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError):
+        return False
+    return True
 
 
 @dataclass
@@ -114,7 +136,14 @@ class Server:
     def _throttled(self, ip: str) -> bool:
         now = time.monotonic()
         recent = [t for t in self.misses.get(ip, []) if now - t < 60]
-        self.misses[ip] = recent
+        if recent:
+            self.misses[ip] = recent
+        else:
+            # An address with nothing recent is an address with no history, and
+            # keeping the empty list is what turned this into a dict that only
+            # ever grows: one entry per address that ever guessed wrong, for the
+            # life of the process, on a server that is meant to run for months.
+            self.misses.pop(ip, None)
         return len(recent) >= self.max_misses
 
     def _miss(self, ip: str) -> None:
@@ -148,7 +177,7 @@ class Server:
             pass
         finally:
             if code is not None and role is not None:
-                self._leave(code, role)
+                self._leave(code, role, ws)
 
     async def _join(self, ws: ServerConnection, msg: dict) -> tuple[str | None, str | None]:
         code = msg.get("code")
@@ -164,15 +193,31 @@ class Server:
             return None, None
 
         self._expire()
-        # Joining a code nobody is waiting on is what guessing looks like, and
-        # the receiver is the one that invents the code and puts it on screen —
-        # so the receiver is always first, and charging it meant every ordinary
-        # start of the program spent one of its own ten attempts while a sender
-        # could guess forever for free.
-        if role == "sender" and code not in self.pairings:
-            self._miss(ip)
+        # Every join costs, not only the blind one. Charging the side that has
+        # to guess left the door open on the side that does not: a receiver's
+        # join was never a miss by the old rule, so the whole six-digit space
+        # could be walked at no cost -- "that role is already taken" for a code
+        # somebody is really waiting on, "joined" for the rest, which is exactly
+        # the oracle the throttle exists to deny. A join is also what mints a
+        # TURN credential, so a client that guessed nothing at all could sit
+        # there collecting twelve-hour relay credentials until coturn had no
+        # quota left for a real cast. The cost to an honest receiver is one
+        # attempt per start of the program, out of ten a minute.
+        self._miss(ip)
         pairing = self.pairings.setdefault(code, Pairing())
-        if role in pairing.peers:
+        incumbent = pairing.peers.get(role)
+        if incumbent is not None and not await _still_there(incumbent):
+            # The peer holding this role is gone and has not noticed. A device
+            # that walks out of Wi-Fi sends no close frame and no FIN, so its
+            # socket stays open on this side until a write finally fails, and
+            # the same device coming back on another network was refused by its
+            # own corpse -- with the only code it has, the one on its screen.
+            # Asking costs one ping and two seconds, and only when the role
+            # looks taken.
+            log.info("code %s: replacing a %s that stopped answering", code, role)
+            del pairing.peers[role]
+            incumbent = None
+        if incumbent is not None:
             # Two senders on one code: a typo, or someone shadowing a live
             # pairing. Either way the first peer keeps the slot.
             await self._error(ws, "that role is already taken")
@@ -218,11 +263,23 @@ class Server:
         except websockets.ConnectionClosed:
             pass
 
-    def _leave(self, code: str, role: str) -> None:
+    def _leave(self, code: str, role: str, ws: ServerConnection) -> None:
         pairing = self.pairings.get(code)
-        if pairing is None:
+        # The pairing filed under this code is not necessarily the one this
+        # connection joined. A receiver whose network vanishes leaves a socket
+        # nobody has closed yet; it comes back a second later with the same code,
+        # because it only ever has the one it printed on screen, and the new
+        # connection takes the slot. The old handler then finishes dying when the
+        # close handshake it will never get an answer to times out, and popping
+        # the role blind evicted the live connection that had replaced it.
+        # Nothing told that receiver, because nothing was wrong with its socket,
+        # and a socket that stays open never reconnects -- so it sat there
+        # showing its code with the server no longer able to reach it, which is
+        # the failure the reconnect in receiver/main.c was written to end. Leave
+        # only if this connection is still the one holding the role.
+        if pairing is None or pairing.peers.get(role) is not ws:
             return
-        pairing.peers.pop(role, None)
+        del pairing.peers[role]
         if not pairing.peers:
             del self.pairings[code]
         log.info("code %s: %s left", code, role)

@@ -15,6 +15,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.net.LocalServerSocket
 import android.net.LocalSocket
+import android.net.LocalSocketAddress
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -38,8 +39,17 @@ class UsbCastService : Service() {
     private var projection: MediaProjection? = null
     private var codec: MediaCodec? = null
     private var virtualDisplay: VirtualDisplay? = null
-    private var serverSocket: LocalServerSocket? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    // Written on the serve thread and read on the main thread in stopCasting.
+    // Without volatile there is no edge between the two, and the main thread is
+    // entitled to go on seeing the null it started with and skip the close.
+    @Volatile
+    private var serverSocket: LocalServerSocket? = null
+
+    /** Kept so stopCasting can reach the name the serve thread is parked on. */
+    @Volatile
+    private var socketName = "aircast"
 
     @Volatile
     private var running = false
@@ -91,8 +101,24 @@ class UsbCastService : Service() {
         // 15 QPR1 stop-on-screen-lock surface.
         projection.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
+                // Mind the name: inside this object `projection` is the local
+                // the callback captured, not the field, so a null test on it
+                // would be a constant true and every stop would look like the
+                // platform's. The field is what carries the answer.
+                // stopCasting() nulls it, and the platform delivers this
+                // callback as a post to the main looper, after the stop that
+                // caused it has returned. So a field still pointing at *this*
+                // projection means the capture was taken from us: consent
+                // revoked from the cast chip, another app taking the
+                // projection, the screen locking on Android 15 QPR1. Dart has
+                // no other way to learn that, and goes on showing a live cast
+                // that has already stopped. A field pointing at some other
+                // projection is the stale callback of a cast that has been
+                // replaced, and it must not tear down its replacement.
+                if (this@UsbCastService.projection !== projection) return
                 stopCasting()
                 stopSelf()
+                onStopped?.invoke()
             }
         }, null)
 
@@ -101,7 +127,7 @@ class UsbCastService : Service() {
         val width = metrics.widthPixels and 1.inv()
         val height = metrics.heightPixels and 1.inv()
         val bitrate = intent.getIntExtra(EXTRA_BITRATE, 6_000_000)
-        val socketName = intent.getStringExtra(EXTRA_SOCKET_NAME) ?: "aircast"
+        socketName = intent.getStringExtra(EXTRA_SOCKET_NAME) ?: "aircast"
 
         val format =
             MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
@@ -138,11 +164,16 @@ class UsbCastService : Service() {
         )
 
         running = true
-        thread(name = "aircast-usb") { serve(socketName, codec) }
+        thread(name = "aircast-usb") { serve() }
     }
 
-    /** Accepts one desktop at a time; a new connection replaces the old one. */
-    private fun serve(socketName: String, codec: MediaCodec) {
+    /**
+     * Accepts one desktop at a time; a new connection replaces the old one.
+     * Reads the socketName and codec fields rather than taking them as
+     * parameters, so there is one name in play and stopCasting can reach it.
+     */
+    private fun serve() {
+        val codec = this.codec ?: return
         try {
             val server = LocalServerSocket(socketName)
             serverSocket = server
@@ -152,7 +183,19 @@ class UsbCastService : Service() {
                 }
             }
         } catch (e: Exception) {
-            if (running) Log.w(TAG, "usb socket closed", e)
+            // running == false is the ordinary stop: the socket was closed out
+            // from under this thread on purpose. running == true means the bind
+            // itself failed, and at that moment the notification says the
+            // tablet is casting, the encoder is filling a VirtualDisplay at six
+            // megabits and the screen is held awake, with nothing listening.
+            // Dart was told the cast started a second before any of this ran,
+            // so a log line has always been the only trace. End the session
+            // instead: the notification going away is the one signal there is.
+            if (running) {
+                Log.e(TAG, "usb socket unavailable, ending the cast", e)
+                stopCasting()
+                stopSelf()
+            }
         } finally {
             serverSocket = null
         }
@@ -248,6 +291,16 @@ class UsbCastService : Service() {
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null
         runCatching { serverSocket?.close() }
+        // Closing the listening socket does not return a thread already parked
+        // in accept(): Linux leaves that syscall blocked, and the reference it
+        // goes on holding keeps the abstract name bound for the life of the
+        // process. That is why the second cast of a run died on "Address
+        // already in use" while the first one's thread sat there for ever. One
+        // connection to the name hands that accept a client; the loop sees
+        // running == false and returns at once, and the name goes with the
+        // thread. It fails harmlessly when the thread has already left, which
+        // is the case where the desktop was still connected.
+        runCatching { LocalSocket().use { it.connect(LocalSocketAddress(socketName)) } }
         virtualDisplay?.release()
         codec?.runCatching { stop() }
         codec?.release()
@@ -270,6 +323,15 @@ class UsbCastService : Service() {
         /** Set by UsbCastPlugin before it starts ACTION_HOLD; fired once startForeground has run. */
         @Volatile
         var onForeground: (() -> Unit)? = null
+
+        /**
+         * Fired when the platform ends the capture rather than us: consent
+         * revoked from the cast chip, another app taking the projection, the
+         * screen locking on Android 15 QPR1. Dart has no other way to learn
+         * this and goes on showing a live cast that has already stopped.
+         */
+        @Volatile
+        var onStopped: (() -> Unit)? = null
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
         const val EXTRA_SOCKET_NAME = "socketName"

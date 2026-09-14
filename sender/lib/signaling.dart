@@ -116,9 +116,17 @@ class Signaling {
     }
   }
 
+  bool _failed = false;
+
   void _fail(String reason) {
     if (!_turn.isCompleted) _turn.completeError(StateError(reason));
     if (!_peer.isCompleted) _peer.completeError(StateError(reason));
+    // Once. The server answers a bad code with an error frame and then closes,
+    // so the real deployment delivers both an 'error' message and an onDone,
+    // and each of them lands here. onClosed is wired to the teardown, so a
+    // second call used to tear down whatever the user had started in between.
+    if (_failed) return;
+    _failed = true;
     onClosed?.call(reason);
   }
 
@@ -127,7 +135,23 @@ class Signaling {
   Future<void> close() async {
     _send({'type': 'bye'});
     await _sub?.cancel();
-    await _channel?.sink.close();
+    // Not awaited, and that is the point of the line. Until the socket is up
+    // this sink is a StreamSinkCompleter buffering into a controller, and its
+    // close() future does not complete until the real sink is handed over,
+    // which for a connect that errored or is still waiting is never. _stop()
+    // awaits this, so a mistyped server address left the window on
+    // "Connecting" with a Stop button that did nothing and the address field
+    // greyed out behind the casting flag, and only a force quit got out of it.
+    // The close still happens if and when the connect resolves.
+    _channel?.sink.close().ignore();
     _channel = null;
+    // Cancelling the subscription above means no onDone and so no failure
+    // callback, so a start() suspended on the TURN list or on peerJoined would
+    // wait for a frame that can no longer arrive, for ever, still holding
+    // whatever it had got as far as creating. Unwind it here instead. The
+    // second teardown that unwind triggers is a no-op: _stop has already taken
+    // the session out of its fields by the time this runs.
+    if (!_turn.isCompleted) _turn.completeError(StateError('signalling closed'));
+    if (!_peer.isCompleted) _peer.completeError(StateError('signalling closed'));
   }
 }

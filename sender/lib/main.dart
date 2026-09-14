@@ -71,13 +71,29 @@ class _SenderPageState extends State<SenderPage> {
 
   bool get _casting => _session != null || _usb;
 
+  @override
+  void initState() {
+    super.initState();
+    if (Platform.isAndroid) {
+      UsbCast.onStopped = () => _stop(status: 'Android stopped the screen capture');
+    }
+  }
+
   Future<void> _castOverNetwork() async {
     final code = _code.text.trim();
     if (code.length != 6) {
       return setState(() => _status = 'The code is six digits');
     }
 
-    final signaling = Signaling(Uri.parse(_url.text.trim()), code);
+    // tryParse, because parse throws and this line sits outside the try below:
+    // a non-numeric port typed into the settings field made the button do
+    // nothing at all. The FormatException completed a Future nobody holds, and
+    // the status line went on inviting the user to enter a code.
+    final url = Uri.tryParse(_url.text.trim());
+    if (url == null) {
+      return setState(() => _status = 'That server address is not a URL');
+    }
+    final signaling = Signaling(url, code);
     final session = CastSession(signaling);
     setState(() {
       _signaling = signaling;
@@ -135,14 +151,27 @@ class _SenderPageState extends State<SenderPage> {
   }
 
   Future<void> _stop({String status = 'Enter the code shown on the desktop'}) async {
-    await _session?.stop();
-    await _signaling?.close();
-    if (_usb) await UsbCast.stop();
+    // Take the session out of the fields before the first await. Everything
+    // that calls this arrives late and unordered: a connect that timed out ten
+    // seconds ago, an onClosed from a socket already gone, a Failed from a peer
+    // connection we just closed. Each of them used to read whatever _session
+    // held at the moment it ran, which by then could be the cast the user
+    // started afterwards, so a timeout from an abandoned attempt stopped a live
+    // one. Whoever arrives first owns the teardown; everyone else finds nothing
+    // and returns.
+    final session = _session;
+    final signaling = _signaling;
+    final usb = _usb;
+    if (session == null && signaling == null && !usb) return;
+    _session = null;
+    _signaling = null;
+    _usb = false;
+
+    await session?.stop();
+    await signaling?.close();
+    if (usb) await UsbCast.stop();
     if (!mounted) return;
     setState(() {
-      _session = null;
-      _signaling = null;
-      _usb = false;
       _connected = false;
       _busy = false;
       _status = status;
