@@ -45,7 +45,6 @@
 
 #include "update_check.h"
 
-#define TOOLBAR_HIDE_MS 2500
 
 /* The two jitter buffer sizes, in milliseconds, that the measurements on this
  * deployment left standing. choose_latency() picks between them from the pair
@@ -99,17 +98,31 @@ typedef struct {
   GtkWidget *picture;
   GtkWidget *code_label;
   GtkWidget *status_label;
-  GtkWidget *revealer;
   GtkWidget *record_button;
   GtkWidget *record_time;
   /* The same text as status_label, in the toolbar. status_label lives on the
    * idle card, and the stack is showing the live page whenever the recording
    * messages at main.c 296, 332, 363 and 425 fire. */
   GtkWidget *live_status;
+
+  /* The strip along the bottom of the window. It is always there, on both
+   * pages, because the question it answers -- what is this connection doing
+   * right now -- is the one this program exists to get right, and until it
+   * existed the answer was a twelve-pixel grey line that said "Negotiating"
+   * and then went blank. */
+  GtkWidget *strip_dot;         /* beacon: grey idle, green live, red failed */
+  GtkWidget *strip_state;       /* "Waiting for a phone" / "Mirroring" */
+  GtkWidget *strip_path;        /* "Direct - host" / "Relay" */
+  GtkWidget *strip_latency;     /* round trip, from get-stats */
+  GtkWidget *strip_buffer;      /* the jitter buffer this cast settled on */
+  GtkWidget *strip_res;         /* what the encoder is sending, right now */
+  GtkWidget *strip_loss;        /* packets lost, as a share of those sent */
+  GtkWidget *toolbar;           /* below the video rather than floating over it */
+  guint stats_timer;            /* 1 Hz while a session is up, 0 otherwise */
+  guint64 last_lost, last_recv; /* so loss reads per second, not per session */
   GtkWidget *update_label;      /* passive: last checked, highest version seen */
   gchar *update_url;            /* built from verified integers, or NULL */
 
-  guint hide_source;
   guint record_timer;
   /* The 700 ms the muxer gets to close its file. Kept so a session that ends
    * inside that window can cancel it rather than let it fire into a pipeline
@@ -182,6 +195,9 @@ static void stop_recording (App *self);
 /* Ends a media session without ending the signalling one: defined below, next
  * to the teardown it shares with a lost socket. */
 static void drop_session (App *self);
+/* Defined beside the strip they drive, used from the session code above it. */
+static void set_strip_state (App *self, const gchar *css, const gchar *text);
+static gboolean poll_stats (gpointer data);
 
 /* ----------------------------------------------------------------- interface */
 
@@ -196,6 +212,11 @@ show_page (App *self, const gchar *page)
    * page, and both post_ui calls that pass a page pass "idle". */
   if (self->live_status)
     gtk_label_set_text (GTK_LABEL (self->live_status), "");
+  /* The toolbar belongs to the live page and nothing in it means anything on
+   * the idle one -- Disconnect from a session that does not exist, Record with
+   * no picture to record. */
+  if (self->toolbar)
+    gtk_widget_set_visible (self->toolbar, g_str_equal (page, "live"));
 }
 
 static void
@@ -239,33 +260,6 @@ post_ui (App *self, const gchar *text, const gchar *page)
   update->text = g_strdup (text);
   update->page = g_strdup (page);
   g_idle_add (apply_ui_update, update);
-}
-
-static gboolean
-hide_toolbar (gpointer data)
-{
-  App *self = data;
-  self->hide_source = 0;
-  /* Never hide the toolbar while recording: the red dot lives in it, and a
-   * recording nobody can see is a recording nobody stops. */
-  if (!self->recording)
-    gtk_revealer_set_reveal_child (GTK_REVEALER (self->revealer), FALSE);
-  return G_SOURCE_REMOVE;
-}
-
-static void
-wake_toolbar (App *self)
-{
-  gtk_revealer_set_reveal_child (GTK_REVEALER (self->revealer), TRUE);
-  if (self->hide_source)
-    g_source_remove (self->hide_source);
-  self->hide_source = g_timeout_add (TOOLBAR_HIDE_MS, hide_toolbar, self);
-}
-
-static void
-on_motion (GtkEventControllerMotion *controller, gdouble x, gdouble y, App *self)
-{
-  wake_toolbar (self);
 }
 
 static gboolean
@@ -348,7 +342,6 @@ start_recording (App *self)
   self->record_timer = g_timeout_add_seconds (1, tick_record_time, self);
   gtk_widget_add_css_class (self->record_button, "recording");
   gtk_widget_set_visible (self->record_time, TRUE);
-  wake_toolbar (self);
 
   gchar *msg = g_strdup_printf ("Recording to %s", self->record_file);
   set_status (self, msg);
@@ -631,6 +624,11 @@ static gboolean
 drop_session_idle (gpointer data)
 {
   drop_session (data);
+  /* After, not before: drop_session ends every session the same way and sets
+   * the neutral state, which is the right one for a cast that simply finished.
+   * This is the one caller where it did not finish -- ICE failed -- and the
+   * beacon says so until the next cast turns it green. */
+  set_strip_state (data, "bad", "Connection failed");
   return G_SOURCE_REMOVE;
 }
 
@@ -1080,6 +1078,24 @@ static gboolean reconnect_signalling (gpointer data);
 static void
 drop_session (App *self)
 {
+  /* Before the pipeline goes: poll_stats asks webrtcbin for a report and would
+   * otherwise fire once more against an element being torn down underneath it. */
+  if (self->stats_timer) {
+    g_source_remove (self->stats_timer);
+    self->stats_timer = 0;
+  }
+  /* Blanked rather than frozen. A reading left on screen from a cast that
+   * ended reads as a cast still running, which is the one thing the strip
+   * exists to be honest about. */
+  if (self->strip_path) {
+    gtk_label_set_text (GTK_LABEL (self->strip_path), "\xe2\x80\x94");
+    gtk_label_set_text (GTK_LABEL (self->strip_latency), "\xe2\x80\x94");
+    gtk_label_set_text (GTK_LABEL (self->strip_buffer), "\xe2\x80\x94");
+    gtk_label_set_text (GTK_LABEL (self->strip_res), "\xe2\x80\x94");
+    gtk_label_set_text (GTK_LABEL (self->strip_loss), "\xe2\x80\x94");
+  }
+  set_strip_state (self, NULL, "Waiting for a phone");
+
   if (self->recording)
     stop_recording (self);
   if (self->pipeline) {
@@ -1224,7 +1240,14 @@ attach_paintable (gpointer data)
     gtk_picture_set_paintable (GTK_PICTURE (self->picture), paintable);
     g_object_unref (paintable);
     show_page (self, "live");
-    wake_toolbar (self);
+    set_strip_state (self, "live", "Mirroring");
+    /* One second, which is slow enough that get-stats costs nothing and fast
+     * enough that a reading is never stale by the time it is read. The counters
+     * restart with the session so the first interval is measured against this
+     * cast and not the last one. */
+    self->last_lost = self->last_recv = 0;
+    if (!self->stats_timer)
+      self->stats_timer = g_timeout_add_seconds (1, poll_stats, self);
   } else {
     set_status (self, "The video sink produced no paintable");
   }
@@ -1363,6 +1386,14 @@ choose_latency (App *self, GstPad *pad)
       chosen == AIRCAST_LATENCY_DIRECT
           ? "ICE selected a host pair"
           : "relayed, reflexive or unknown path");
+  /* And on screen, in the same words the buffer was chosen by. The distinction
+   * matters to the person watching: a relayed pair is the difference between a
+   * hop of a millisecond and a round trip through another country, and it is
+   * the one thing about a slow cast the user can actually act on -- by moving
+   * both ends onto the same network. */
+  if (self->strip_path)
+    gtk_label_set_text (GTK_LABEL (self->strip_path),
+        chosen == AIRCAST_LATENCY_DIRECT ? "Direct" : "Relayed");
 }
 
 /* One tail per incoming pad, chosen from the RTP caps. H.264 is what the phone
@@ -1770,6 +1801,229 @@ build_live_page (App *self)
   return bezel;
 }
 
+/* The strip's state half, driven from wherever the session's state actually
+ * changes rather than polled. `css` is the beacon's colour class. */
+static void
+set_strip_state (App *self, const gchar *css, const gchar *text)
+{
+  if (!self->strip_dot)
+    return;
+  gtk_widget_remove_css_class (self->strip_dot, "live");
+  gtk_widget_remove_css_class (self->strip_dot, "bad");
+  if (css)
+    gtk_widget_add_css_class (self->strip_dot, css);
+  gtk_label_set_text (GTK_LABEL (self->strip_state), text);
+}
+
+/* Once a second while a session is up.
+ *
+ * webrtcbin's get-stats reply is a flat GstStructure of GstStructures, one per
+ * RTCStats object, so the whole report is walked rather than indexed -- the
+ * same shape choose_latency reads at pad-added, and the field names are the
+ * ones the WebRTC statistics spec gives, lower-cased with hyphens.
+ *
+ * Asynchronous, and that is the whole reason this is three functions instead
+ * of one. gst_promise_wait blocks its caller until webrtcbin answers, and
+ * choose_latency can afford that because it runs once, on a streaming thread,
+ * at pad-added. Here the caller would be the GTK main thread, once a second,
+ * for the life of the cast -- the same thread that paints every frame. A
+ * hundred milliseconds of it is six dropped frames, and this program has
+ * already spent a day on one main-thread stall. So the reply is read on
+ * webrtcbin's thread, reduced to six numbers, and those cross to the main
+ * thread the way every other cross-thread update in this file does.
+ *
+ * Loss is reported per interval and not per session on purpose. A cast that
+ * dropped a burst in its first ten seconds and has been clean for an hour
+ * should not still show a bad number: the question is whether it is bad NOW. */
+typedef struct {
+  App *self;
+  gdouble rtt_ms;               /* < 0 when the report carried none */
+  guint width, height;
+  guint64 lost, recv;
+} Stats;
+
+static gboolean
+apply_stats (gpointer data)
+{
+  Stats *st = data;
+  App *self = st->self;
+
+  /* The session can end between the report being taken and this running. */
+  if (!self->strip_path || !self->stats_timer) {
+    g_free (st);
+    return G_SOURCE_REMOVE;
+  }
+
+  if (st->rtt_ms >= 0.0) {
+    gchar *t = g_strdup_printf ("%.0f ms", st->rtt_ms);
+    gtk_label_set_text (GTK_LABEL (self->strip_latency), t);
+    g_free (t);
+  }
+
+  if (self->latency_chosen > 0) {
+    gchar *t = g_strdup_printf ("%d ms", self->latency_chosen);
+    gtk_label_set_text (GTK_LABEL (self->strip_buffer), t);
+    g_free (t);
+  }
+
+  /* The paintable knows the picture's real size and needs no promise for it.
+   * frame-width from the report is the encoder's view of the same thing and is
+   * absent on some builds, so this is the reading that always has an answer --
+   * and it is the one that explains a picture which starts small and grows. */
+  if (!st->width && self->picture) {
+    GdkPaintable *p = gtk_picture_get_paintable (GTK_PICTURE (self->picture));
+    if (p) {
+      st->width = (guint) gdk_paintable_get_intrinsic_width (p);
+      st->height = (guint) gdk_paintable_get_intrinsic_height (p);
+    }
+  }
+  if (st->width && st->height) {
+    gchar *t = g_strdup_printf ("%u×%u", st->width, st->height);
+    gtk_label_set_text (GTK_LABEL (self->strip_res), t);
+    g_free (t);
+  }
+
+  if (st->recv >= self->last_recv && st->lost >= self->last_lost) {
+    guint64 dl = st->lost - self->last_lost, dr = st->recv - self->last_recv;
+    if (dr + dl > 0) {
+      gchar *t = g_strdup_printf ("%.2f%%", 100.0 * (gdouble) dl / (gdouble) (dr + dl));
+      gtk_label_set_text (GTK_LABEL (self->strip_loss), t);
+      g_free (t);
+    }
+  }
+  self->last_lost = st->lost;
+  self->last_recv = st->recv;
+
+  g_free (st);
+  return G_SOURCE_REMOVE;
+}
+
+/* On a webrtcbin thread. Reads, reduces, hands over; touches no widget. */
+static void
+on_stats (GstPromise *promise, gpointer user_data)
+{
+  App *self = user_data;
+  const GstStructure *reply = NULL;
+  Stats *st;
+
+  if (gst_promise_wait (promise) == GST_PROMISE_RESULT_REPLIED)
+    reply = gst_promise_get_reply (promise);
+
+  st = g_new0 (Stats, 1);
+  st->self = self;
+  st->rtt_ms = -1.0;
+
+  for (gint i = 0; reply && i < gst_structure_n_fields (reply); i++) {
+    const GValue *value = gst_structure_get_value (reply,
+        gst_structure_nth_field_name (reply, i));
+    const GstStructure *s;
+    gdouble d;
+    guint64 u;
+    guint w;
+
+    if (!GST_VALUE_HOLDS_STRUCTURE (value))
+      continue;
+    s = gst_value_get_structure (value);
+
+    /* Seconds in the spec, milliseconds on a screen. */
+    if (gst_structure_get_double (s, "round-trip-time", &d) && d >= 0.0)
+      st->rtt_ms = d * 1000.0;
+    if (gst_structure_get_uint64 (s, "packets-lost", &u))
+      st->lost += u;
+    if (gst_structure_get_uint64 (s, "packets-received", &u))
+      st->recv += u;
+    if (gst_structure_get_uint (s, "frame-width", &w) && w) {
+      st->width = w;
+      gst_structure_get_uint (s, "frame-height", &st->height);
+    }
+  }
+
+  gst_promise_unref (promise);
+  g_idle_add (apply_stats, st);
+}
+
+static gboolean
+poll_stats (gpointer data)
+{
+  App *self = data;
+  GstPromise *promise;
+
+  if (!self->webrtc) {
+    self->stats_timer = 0;
+    return G_SOURCE_REMOVE;
+  }
+
+  /* NULL pad: the whole report rather than one transceiver's. The promise is
+   * unreffed by on_stats, which the change func hands it to. */
+  promise = gst_promise_new_with_change_func (on_stats, self, NULL);
+  g_signal_emit_by_name (self->webrtc, "get-stats", NULL, promise);
+  return G_SOURCE_CONTINUE;
+}
+
+/* One reading in the strip: a small upper-case key over a monospaced value.
+ * Monospaced because these numbers change every second and a proportional font
+ * makes the whole row twitch sideways as digits swap width. */
+static GtkWidget *
+strip_cell (const gchar *key, const gchar *initial, GtkWidget **value_out)
+{
+  GtkWidget *cell = gtk_box_new (GTK_ORIENTATION_VERTICAL, 1);
+  gtk_widget_add_css_class (cell, "cell");
+
+  GtkWidget *k = gtk_label_new (key);
+  gtk_widget_add_css_class (k, "cell-key");
+  gtk_widget_set_halign (k, GTK_ALIGN_START);
+
+  GtkWidget *v = gtk_label_new (initial);
+  gtk_widget_add_css_class (v, "cell-value");
+  gtk_widget_set_halign (v, GTK_ALIGN_START);
+
+  gtk_box_append (GTK_BOX (cell), k);
+  gtk_box_append (GTK_BOX (cell), v);
+  *value_out = v;
+  return cell;
+}
+
+/* The strip along the bottom, on both pages and at all times.
+ *
+ * Everything in it was already known and none of it was shown. The path ICE
+ * settled on decides the jitter buffer (choose_latency), the buffer decides a
+ * third of the delay, and the resolution is what libwebrtc's quality scaler
+ * happens to have left of the source -- which is the whole explanation for a
+ * picture that starts small and grows, and it used to take a log file to see.
+ * A row of six readings costs about fifty pixels of window and answers all of
+ * it at a glance. */
+static GtkWidget *
+build_strip (App *self)
+{
+  GtkWidget *bar = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_add_css_class (bar, "strip");
+
+  GtkWidget *state = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_widget_add_css_class (state, "cell");
+  self->strip_dot = gtk_label_new ("");
+  gtk_widget_add_css_class (self->strip_dot, "beacon");
+  gtk_widget_set_valign (self->strip_dot, GTK_ALIGN_CENTER);
+  self->strip_state = gtk_label_new ("Starting");
+  gtk_widget_add_css_class (self->strip_state, "cell-state");
+  gtk_box_append (GTK_BOX (state), self->strip_dot);
+  gtk_box_append (GTK_BOX (state), self->strip_state);
+  gtk_box_append (GTK_BOX (bar), state);
+
+  gtk_box_append (GTK_BOX (bar), strip_cell ("PATH", "—", &self->strip_path));
+  gtk_box_append (GTK_BOX (bar), strip_cell ("LATENCY", "—", &self->strip_latency));
+  gtk_box_append (GTK_BOX (bar), strip_cell ("BUFFER", "—", &self->strip_buffer));
+  gtk_box_append (GTK_BOX (bar), strip_cell ("PICTURE", "—", &self->strip_res));
+  gtk_box_append (GTK_BOX (bar), strip_cell ("LOSS", "—", &self->strip_loss));
+
+  /* Eats the slack, so the readings stay left and do not spread out across a
+   * wide window with a hand's width between them. */
+  GtkWidget *spacer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_set_hexpand (spacer, TRUE);
+  gtk_box_append (GTK_BOX (bar), spacer);
+
+  return bar;
+}
+
 static GtkWidget *
 build_toolbar (App *self)
 {
@@ -1792,9 +2046,9 @@ build_toolbar (App *self)
   gtk_widget_add_css_class (self->live_status, "hint");
   /* MIDDLE, because the two messages worth reading here are file paths and
    * both ends of one matter. width_chars and max_width_chars both 40 so the
-   * pill is a FIXED size: the revealer is halign CENTER, so a label that
-   * grows with its text slides every button sideways under the cursor that is
-   * about to press one of them -- including Disconnect, two places along. */
+   * label is a FIXED size: it sits between the record timer and the buttons,
+   * and one that grew with its text would slide every button sideways under
+   * the cursor about to press one -- including Disconnect, two places along. */
   gtk_label_set_ellipsize (GTK_LABEL (self->live_status), PANGO_ELLIPSIZE_MIDDLE);
   gtk_label_set_width_chars (GTK_LABEL (self->live_status), 40);
   gtk_label_set_max_width_chars (GTK_LABEL (self->live_status), 40);
@@ -1862,22 +2116,26 @@ activate (GtkApplication *app, gpointer user_data)
   gtk_stack_add_named (GTK_STACK (self->stack), build_idle_page (self), "idle");
   gtk_stack_add_named (GTK_STACK (self->stack), build_live_page (self), "live");
 
-  self->revealer = gtk_revealer_new ();
-  gtk_revealer_set_transition_type (GTK_REVEALER (self->revealer),
-      GTK_REVEALER_TRANSITION_TYPE_SLIDE_UP);
-  gtk_revealer_set_child (GTK_REVEALER (self->revealer), build_toolbar (self));
-  gtk_widget_set_halign (self->revealer, GTK_ALIGN_CENTER);
-  gtk_widget_set_valign (self->revealer, GTK_ALIGN_END);
-  gtk_widget_set_margin_bottom (self->revealer, 28);
-
-  GtkWidget *overlay = gtk_overlay_new ();
-  gtk_overlay_set_child (GTK_OVERLAY (overlay), self->stack);
-  gtk_overlay_add_overlay (GTK_OVERLAY (overlay), self->revealer);
-  gtk_window_set_child (GTK_WINDOW (self->window), overlay);
-
-  GtkEventController *motion = gtk_event_controller_motion_new ();
-  g_signal_connect (motion, "motion", G_CALLBACK (on_motion), self);
-  gtk_widget_add_controller (self->window, motion);
+  /* Stacked rather than overlaid. The toolbar used to float over the video and
+   * appear on mouse movement, which hid the button that ends the cast at
+   * exactly the moment someone reaches for it -- they have been looking at
+   * their phone's screen, not moving a mouse. It sits under the picture now,
+   * and the strip under that, both in the window's own vertical box. The
+   * fifty-odd pixels that costs come out of a picture that is letterboxed
+   * against a 16:9 monitor anyway.
+   *
+   * vexpand on the stack alone is what keeps the two bars at the bottom: a box
+   * gives its spare height to whichever child asks for it. */
+  GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_set_vexpand (self->stack, TRUE);
+  self->toolbar = build_toolbar (self);
+  /* Hidden until there is something to operate. On the idle page every button
+   * in it is either meaningless or destructive. */
+  gtk_widget_set_visible (self->toolbar, FALSE);
+  gtk_box_append (GTK_BOX (column), self->stack);
+  gtk_box_append (GTK_BOX (column), self->toolbar);
+  gtk_box_append (GTK_BOX (column), build_strip (self));
+  gtk_window_set_child (GTK_WINDOW (self->window), column);
 
   GtkEventController *keys = gtk_event_controller_key_new ();
   g_signal_connect (keys, "key-pressed", G_CALLBACK (on_key_pressed), self);

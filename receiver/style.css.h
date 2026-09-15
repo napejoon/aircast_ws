@@ -69,15 +69,71 @@
 "  background: #000000;"
 "}"
 
+/* ------------------------------------------------------- connection strip */
+
+/* Along the bottom on both pages. Reads as part of the window's frame rather
+ * than as a card floating in it, so it has one hairline above it and no
+ * radius, no shadow and no fill of its own beyond a shade off the room. */
+".strip {"
+"  background: #101317;"
+"  border-top: 1px solid #232830;"
+"}"
+
+".cell {"
+"  padding: 8px 16px;"
+"  border-right: 1px solid #232830;"
+"}"
+
+".cell-key {"
+"  font-size: 9px;"
+"  font-weight: 700;"
+"  letter-spacing: 2px;"
+"  color: #4E5661;"
+"}"
+
+/* Monospaced and tabular: these numbers change every second, and in a
+ * proportional face the whole row twitches sideways as digits swap width. */
+".cell-value {"
+"  font-family: monospace;"
+"  font-size: 12px;"
+"  font-feature-settings: 'tnum' 1;"
+"  color: #f2f5f9;"
+"}"
+
+".cell-state {"
+"  font-size: 12px;"
+"  color: #c9d1dc;"
+"}"
+
+/* A disc drawn by the box rather than by a glyph, so it does not depend on
+ * whatever font happens to carry a filled circle. Grey until there is a
+ * session to be green about. */
+".beacon {"
+"  min-width: 8px;"
+"  min-height: 8px;"
+"  border-radius: 999px;"
+"  background: #4E5661;"
+"}"
+
+".beacon.live {"
+"  background: #3ddc91;"
+"}"
+
+".beacon.bad {"
+"  background: #ff6b5e;"
+"}"
+
 /* ---------------------------------------------------------------- toolbar */
 
-/* Floats over the video, appears on movement, fades out again. */
+/* A row under the picture, not a pill floating over it. It used to appear on
+ * mouse movement and fade out again, which hid the button that ends the cast
+ * at the moment someone reaches for it: they have been watching a phone
+ * screen, not moving a mouse. No radius and no shadow, because it is part of
+ * the window's frame now rather than an object sitting on the video. */
 ".toolbar {"
-"  padding: 8px;"
-"  border-radius: 999px;"
-"  background: rgba(20, 23, 28, 0.92);"
-"  border: 1px solid #2b3038;"
-"  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);"
+"  padding: 6px 10px;"
+"  background: #101317;"
+"  border-top: 1px solid #232830;"
 "}"
 
 "button.tool {"
