@@ -121,16 +121,30 @@ class CastSession {
   static const _dropFpsBelowBps = 4000000;
   static const _raiseFpsAboveBps = 6000000;
 
-  /// Consecutive readings under the drop threshold. The estimate opens at
-  /// libwebrtc's 300 kbit/s start bitrate and probes its way up over the first
-  /// second or two, so one low reading at the start of a cast is the ramp, not
-  /// the link. Two in a row is the link.
+  /// Consecutive readings under the drop threshold, counted only once the
+  /// opening ramp is over.
+  ///
+  /// The estimate opens at libwebrtc's 300 kbit/s start bitrate and probes its
+  /// way up, and two ticks were not enough to wait it out. Measured on a direct
+  /// same-Wi-Fi cast with the two-tick rule: the cap dropped to 30 at +1.8 s on
+  /// an estimate of 600 kbit/s, and that made a loop of it -- half the frames
+  /// and a quarter of the pixels put a trickle of media on the wire, the
+  /// estimate climbed only as fast as that trickle let it, and the cap sat at
+  /// 30 for forty-eight seconds on a link that carries 12 Mbit/s. Full
+  /// resolution came back at 53 s where it had taken 44 before the cap existed.
+  /// So: nothing for the first ten seconds, which is the ramp on any link, and
+  /// three low readings in a row after that. The university Wi-Fi at a steady
+  /// 2.3 Mbit/s still trips it, at 13 s instead of 2.
   int _lowTicks = 0;
+  static const _rampSeconds = 10;
+  DateTime? _connectedAt;
 
   Future<void> _adaptFrameRate(RTCPeerConnection pc, int? bwe) async {
     if (bwe == null) return;
+    _connectedAt ??= DateTime.now();
+    if (DateTime.now().difference(_connectedAt!).inSeconds < _rampSeconds) return;
     _lowTicks = bwe < _dropFpsBelowBps ? _lowTicks + 1 : 0;
-    final want = _lowTicks >= 2
+    final want = _lowTicks >= 3
         ? 30
         : (bwe > _raiseFpsAboveBps ? 60 : _fpsCap);
     if (want == _fpsCap) return;
