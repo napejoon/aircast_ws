@@ -70,7 +70,7 @@ def client_ip(ws: ServerConnection) -> str:
     overwrites the header for the same reason; this is the half that survives a
     proxy someone else configures."""
     peer = ws.remote_address[0] if ws.remote_address else "?"
-    if peer in ("127.0.0.1", "::1"):
+    if peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
         # get_all, not get: a field that arrives on two lines means exactly what
         # the same field comma-joined on one line means (RFC 9110), but get() is
         # Mapping.get and only swallows KeyError, while websockets raises
@@ -114,6 +114,8 @@ class Pairing:
     # is every cast anyone sits through. The rejoin then found nobody left to be
     # offered to, which is the whole of what the rejoin is for.
     paired: bool = False
+    # When the receiver now in the slot joined; its TURN credential is that old.
+    receiver_since: float = 0.0
 
 
 class Server:
@@ -241,14 +243,35 @@ class Server:
             await self._error(ws, "that role is already taken")
             return None, None
         pairing.peers[role] = ws
+        if role == "receiver":
+            pairing.receiver_since = time.monotonic()
 
-        await ws.send(json.dumps({
-            "type": "joined",
-            "turn": turn_credentials(self.secret, self.urls, self.turn_ttl),
-        }))
+        try:
+            await ws.send(json.dumps({
+                "type": "joined",
+                "turn": turn_credentials(self.secret, self.urls, self.turn_ttl),
+            }))
+        except websockets.ConnectionClosed:
+            # The slot is taken but handle() has no code yet, so its finally
+            # never reaches _leave: the dead socket sat in the role for ever,
+            # kept the pairing alive once the other side left, and the next
+            # phone to type this code was told "peer" and offered to a corpse.
+            # Measured with a joiner that gave up inside _still_there's park.
+            self._leave(code, role, ws)
+            raise
 
         other = ROLES[0] if role == ROLES[1] else ROLES[1]
         peer = pairing.peers.get(other)
+        if (peer is not None and role == "sender"
+                and time.monotonic() - pairing.receiver_since > self.turn_ttl / 2):
+            # The receiver keeps the TURN block from its own "joined" for the
+            # life of its socket (receiver/main.c on_message), and a receiver
+            # left running after a cast holds a paired pairing that nothing
+            # expires, so the next morning's cast was built on a credential
+            # coturn had stopped accepting hours before. A close makes it
+            # rejoin -- it has the one code -- and the rejoin is what pairs.
+            asyncio.create_task(peer.close(code=1000, reason="pairing expired"))
+            peer = None
         if peer is not None:
             pairing.paired = True
             # Tell both sides. This frame is the sender's cue to offer, every
@@ -314,7 +337,14 @@ class Server:
     def _expire(self) -> None:
         now = time.monotonic()
         for code, pairing in list(self.pairings.items()):
-            if now - pairing.created > self.ttl and not pairing.paired:
+            # Not a code a receiver holds: it has the one code, on its screen,
+            # and rejoins with it a second after any close (receiver/main.c
+            # on_ws_closed), so the kick retired nothing. What it did was land
+            # on the receiver at the instant its sender arrived, whenever the
+            # receiver had waited past the TTL, and cost every such cast a
+            # "connection closed. Reconnecting" and a second before "peer".
+            if (now - pairing.created > self.ttl and not pairing.paired
+                    and "receiver" not in pairing.peers):
                 for ws in pairing.peers.values():
                     asyncio.create_task(ws.close(code=1000, reason="pairing expired"))
                 del self.pairings[code]

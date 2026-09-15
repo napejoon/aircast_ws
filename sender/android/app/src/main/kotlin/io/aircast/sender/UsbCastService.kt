@@ -446,6 +446,23 @@ class UsbCastService : Service() {
         projection = null
     }
 
+    /**
+     * The task swiped away from Recents destroys the Flutter engine, and
+     * flutter_webrtc's detach stops its capture with it (GetUserMediaImpl
+     * .removeVideoCapturer -> stopCapture). Nothing tells this service: on the
+     * network path it goes on holding the screen awake under a notification
+     * that says the screen is being mirrored, when nothing is. The USB capture
+     * is this service's own and outlives the window on purpose; its
+     * notification still has a working Stop.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (projection == null) {
+            stopCasting()
+            stopSelf()
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         stopCasting()
         super.onDestroy()

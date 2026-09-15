@@ -102,6 +102,10 @@ renews. On the deployed server that was two unrelated websites, three times a
 quarter, each one ending every cast in flight. Match the lineage:
 
 ```bash
+# The sed below reads this. Nothing earlier sets it, and an unset variable
+# turns the case pattern into `*/)`, which matches no lineage -- the exact
+# silent failure the next comment describes.
+TURN_DOMAIN=turn.example.com
 cat >/etc/letsencrypt/renewal-hooks/deploy/aircast.sh <<'EOF'
 #!/bin/sh
 # nginx reads the certificate once, at start, so a renewal that nothing reloads
@@ -314,7 +318,10 @@ candidates and never sends media, so it exercises nothing in 49160-49360: it wil
 with that whole range blocked at the cloud firewall. The `turnutils_uclient` run above is what covers it.
 
 When #13's spike runs, set `iceTransportPolicy: 'relay'` on both peers so a working `srflx` path cannot mask a
-dead relay range — which is what the app does in production anyway.
+dead relay range. The app itself no longer does this by default (`--relay-only` on the receiver,
+`--dart-define=AIRCAST_RELAY=true` on the sender put it back); it gathers relay candidates alongside host ones
+and uses the relay only where the direct path is blocked, so a broken relay range shows up in production only
+on such a network.
 
 **Prove the reboot**, because the drop-in in section 3 is the only thing standing between a power cycle and a
 dead relay:

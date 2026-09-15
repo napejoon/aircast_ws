@@ -86,6 +86,12 @@ class CastSession {
 
   Timer? _statsTimer;
 
+  /// Set by stop(). start() reads it on the way out, because stop() can run
+  /// while start() is still awaiting the consent dialog or getDisplayMedia,
+  /// and everything start() builds after that would otherwise outlive the
+  /// session: a capture the cast chip shows and no button can end.
+  bool _stopped = false;
+
   /// The frame-rate cap currently written into the sender parameters.
   ///
   /// Sixty on a link that can carry it, thirty on one that cannot, and the
@@ -115,9 +121,16 @@ class CastSession {
   static const _dropFpsBelowBps = 4000000;
   static const _raiseFpsAboveBps = 6000000;
 
+  /// Consecutive readings under the drop threshold. The estimate opens at
+  /// libwebrtc's 300 kbit/s start bitrate and probes its way up over the first
+  /// second or two, so one low reading at the start of a cast is the ramp, not
+  /// the link. Two in a row is the link.
+  int _lowTicks = 0;
+
   Future<void> _adaptFrameRate(RTCPeerConnection pc, int? bwe) async {
     if (bwe == null) return;
-    final want = bwe < _dropFpsBelowBps
+    _lowTicks = bwe < _dropFpsBelowBps ? _lowTicks + 1 : 0;
+    final want = _lowTicks >= 2
         ? 30
         : (bwe > _raiseFpsAboveBps ? 60 : _fpsCap);
     if (want == _fpsCap) return;
@@ -145,8 +158,10 @@ class CastSession {
   /// by putting both ends on the same Wi-Fi.
   ///
   /// Read from the SELECTED pair rather than from the candidate list, because a
-  /// connection gathers relay candidates it never uses; `state == 'succeeded'`
-  /// is the one ICE actually settled on. Its local candidate carries the type.
+  /// connection gathers relay candidates it never uses. The transport report
+  /// names that pair; `state == 'succeeded'` alone does not, because the relay
+  /// pair answers checks too and a pruned pair keeps its state for thirty
+  /// seconds after ICE stopped using it. Its local candidate carries the type.
   Future<CastStats?> _readStats(RTCPeerConnection pc) async {
     final reports = await pc.getStats();
     String? localId;
@@ -154,9 +169,18 @@ class CastSession {
     int? width, height, fps, bwe;
     var path = 'unknown';
 
+    String? selectedId;
+    for (final r in reports) {
+      if (r.type == 'transport') {
+        selectedId = r.values['selectedCandidatePairId'] as String? ?? selectedId;
+      }
+    }
     for (final r in reports) {
       final v = r.values;
-      if (r.type == 'candidate-pair' && v['state'] == 'succeeded') {
+      final selected = selectedId != null
+          ? r.id == selectedId
+          : v['state'] == 'succeeded' && v['nominated'] == true;
+      if (r.type == 'candidate-pair' && selected) {
         localId = v['localCandidateId'] as String?;
         final rtt = v['currentRoundTripTime'];
         // Seconds in the spec, milliseconds on a screen.
@@ -184,6 +208,15 @@ class CastSession {
   }
 
   Future<void> start() async {
+    try {
+      await _start();
+    } finally {
+      if (_stopped) await stop();
+    }
+    if (_stopped) throw StateError('the cast was stopped');
+  }
+
+  Future<void> _start() async {
     final turn = await _signaling.turn;
 
     // Android enforces three steps in this order, and the middle one is ours.
@@ -452,6 +485,7 @@ class CastSession {
   }
 
   Future<void> stop() async {
+    _stopped = true;
     // Before the connection goes: the tick calls getStats on it.
     _statsTimer?.cancel();
     _statsTimer = null;

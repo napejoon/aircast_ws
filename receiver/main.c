@@ -86,6 +86,7 @@ typedef struct {
   GstPad *record_tee_pad;
   gchar *record_mux;            /* the muxer half of the tail, per codec */
   gchar *record_file;
+  gboolean drop_pending;        /* drop_session is waiting on drop_record_branch */
   /* The TURN block the server sent with "joined". Kept because that message
    * arrives once per socket and build_pipeline is the only thing that reads
    * it, so a session that ends while the socket lives needs it a second time. */
@@ -132,6 +133,9 @@ typedef struct {
   guint record_drop_timer;
   gint64 record_started;
   gboolean recording;
+  /* Disconnect sent a "bye" and the phone answers it with one of its own
+   * (signaling.dart close()); that echo must not rewrite the status. */
+  gboolean disconnecting;
 } App;
 
 /* Run before anything else in main(), and specifically before
@@ -380,6 +384,10 @@ drop_record_branch (gpointer data)
   gchar *msg = g_strdup_printf ("Saved %s", self->record_file ? self->record_file : "");
   set_status (self, msg);
   g_free (msg);
+  if (self->drop_pending) {
+    self->drop_pending = FALSE;
+    drop_session (self);
+  }
   return G_SOURCE_REMOVE;
 }
 
@@ -481,6 +489,7 @@ on_disconnect_clicked (GtkButton *button, App *self)
   json_builder_add_string_value (b, "bye");
   json_builder_end_object (b);
   send_json (self, b);        /* takes the builder */
+  self->disconnecting = TRUE;
 
   stop_recording (self);
   show_page (self, "idle");
@@ -494,13 +503,16 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint code,
 {
   switch (keyval) {
     case GDK_KEY_f:
+    case GDK_KEY_F:
     case GDK_KEY_F11:
       on_fullscreen_clicked (NULL, self);
       return TRUE;
     case GDK_KEY_r:
+    case GDK_KEY_R:
       gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (self->record_button), !self->recording);
       return TRUE;
     case GDK_KEY_d:
+    case GDK_KEY_D:
       on_strip_toggled (NULL, self);
       return TRUE;
     case GDK_KEY_Escape:
@@ -1035,6 +1047,8 @@ on_message (SoupWebsocketConnection *ws, gint type, GBytes *bytes, App *self)
     self->turn = turn ? json_object_ref (turn) : NULL;
     build_pipeline (self, turn);
   } else if (g_str_equal (kind, "peer")) {
+    /* A new phone: an echo that never arrived must not swallow its bye. */
+    self->disconnecting = FALSE;
     set_status (self, "A phone is connecting…");
   } else if (g_str_equal (kind, "offer")) {
     on_offer (self, json_object_get_string_member (msg, "sdp"));
@@ -1044,13 +1058,19 @@ on_message (SoupWebsocketConnection *ws, gint type, GBytes *bytes, App *self)
         (guint) json_object_get_int_member_with_default (c, "sdpMLineIndex", 0),
         json_object_get_string_member (c, "candidate"));
   } else if (g_str_equal (kind, "bye")) {
-    stop_recording (self);
-    show_page (self, "idle");
-    set_status (self, "The phone stopped casting");
-    /* And end it, rather than leaving a finished webrtcbin sending into a
-     * transport the phone has already hung up. This runs on the main thread,
-     * so it can call drop_session directly. */
-    drop_session (self);
+    if (self->disconnecting) {
+      /* The phone echoing our own Disconnect: the idle page already says
+       * "Ready for the next cast" and the session is already gone. */
+      self->disconnecting = FALSE;
+    } else {
+      stop_recording (self);
+      show_page (self, "idle");
+      set_status (self, "The phone stopped casting");
+      /* And end it, rather than leaving a finished webrtcbin sending into a
+       * transport the phone has already hung up. This runs on the main thread,
+       * so it can call drop_session directly. */
+      drop_session (self);
+    }
   } else if (g_str_equal (kind, "error")) {
     /* Never render the server's own words: this label also carries the update
      * notice, and an attacker-controlled string in it is a phishing primitive. */
@@ -1095,7 +1115,6 @@ drop_session (App *self)
    * exists to be honest about. */
   if (self->strip_path) {
     gtk_label_set_text (GTK_LABEL (self->strip_path), "\xe2\x80\x94");
-    gtk_label_set_text (GTK_LABEL (self->strip_latency), "\xe2\x80\x94");
     gtk_label_set_text (GTK_LABEL (self->strip_buffer), "\xe2\x80\x94");
     gtk_label_set_text (GTK_LABEL (self->strip_res), "\xe2\x80\x94");
     gtk_label_set_text (GTK_LABEL (self->strip_loss), "\xe2\x80\x94");
@@ -1104,6 +1123,14 @@ drop_session (App *self)
 
   if (self->recording)
     stop_recording (self);
+  /* A recording still closing: the muxer has 700 ms to write its index and
+   * needs the pipeline alive for them. Finish there instead -- drop_record_branch
+   * calls back in -- rather than pull the pipeline out from under the file.
+   * Disconnect used to close the window, and shutdown_app waits for the EOS. */
+  if (self->record_branch) {
+    self->drop_pending = TRUE;
+    return;
+  }
   if (self->pipeline) {
     /* The watch holds a ref on the bus and a GSource on the main context, and
      * build_pipeline installs a fresh one per session. Left behind, every
@@ -1145,6 +1172,9 @@ on_ws_closed (SoupWebsocketConnection *ws, App *self)
   if (self->ws == ws) {
     g_clear_object (&self->ws);
     drop_session (self);
+    /* After drop_session, which sets the neutral text: no phone can reach
+     * this window until on_connected turns it back. */
+    set_strip_state (self, "bad", "Reconnecting to the server");
   }
 
   if (self->reconnect_source)
@@ -1395,14 +1425,10 @@ choose_latency (App *self, GstPad *pad)
       chosen == AIRCAST_LATENCY_DIRECT
           ? "ICE selected a host pair"
           : "relayed, reflexive or unknown path");
-  /* And on screen, in the same words the buffer was chosen by. The distinction
-   * matters to the person watching: a relayed pair is the difference between a
-   * hop of a millisecond and a round trip through another country, and it is
-   * the one thing about a slow cast the user can actually act on -- by moving
-   * both ends onto the same network. */
-  if (self->strip_path)
-    gtk_label_set_text (GTK_LABEL (self->strip_path),
-        chosen == AIRCAST_LATENCY_DIRECT ? "Direct" : "Relayed");
+  /* Not written to the strip from here: this runs on the streaming thread
+   * that delivered the pad, and a GtkLabel may only be touched from the main
+   * one. apply_stats reads latency_chosen there and shows the buffer and the
+   * path it was chosen by, within the second. */
 }
 
 /* One tail per incoming pad, chosen from the RTP caps. H.264 is what the phone
@@ -1745,6 +1771,16 @@ build_idle_page (App *self)
   gtk_box_append (GTK_BOX (box), self->status_label);
   gtk_box_append (GTK_BOX (box), self->update_label);
 
+  /* Next to the label it writes to. It sat in the toolbar, which show_page
+   * hides on this page -- so "click Update" pointed at nothing, and a press
+   * during a cast reported to a page nobody could see. */
+  GtkWidget *update = gtk_button_new_with_label ("Update");
+  gtk_button_set_has_frame (GTK_BUTTON (update), FALSE);
+  gtk_widget_add_css_class (update, "hint");
+  gtk_widget_set_tooltip_text (update, "Check for a new version");
+  g_signal_connect (update, "clicked", G_CALLBACK (on_update_clicked), self);
+  gtk_box_append (GTK_BOX (box), update);
+
 #ifdef G_OS_WIN32
   /* On the idle card and nowhere else: this is the screen someone stares at
    * when the phone in their hand has no aircast on it, and by the time there is
@@ -1877,16 +1913,15 @@ apply_stats (gpointer data)
     return G_SOURCE_REMOVE;
   }
 
-  if (st->rtt_ms >= 0.0) {
-    gchar *t = g_strdup_printf ("%.0f ms", st->rtt_ms);
-    gtk_label_set_text (GTK_LABEL (self->strip_latency), t);
-    g_free (t);
-  }
-
   if (self->latency_chosen > 0) {
     gchar *t = g_strdup_printf ("%d ms", self->latency_chosen);
     gtk_label_set_text (GTK_LABEL (self->strip_buffer), t);
     g_free (t);
+    /* In the same words the buffer was chosen by: a relayed pair is the one
+     * thing about a slow cast the user can act on, by moving both ends onto
+     * the same network. */
+    gtk_label_set_text (GTK_LABEL (self->strip_path),
+        self->latency_chosen == AIRCAST_LATENCY_DIRECT ? "Direct" : "Relayed");
   }
 
   /* The paintable knows the picture's real size and needs no promise for it.
@@ -1942,6 +1977,7 @@ on_stats (GstPromise *promise, gpointer user_data)
     const GstStructure *s;
     gdouble d;
     guint64 u;
+    gint64 l;
     guint w;
 
     if (!GST_VALUE_HOLDS_STRUCTURE (value))
@@ -1951,8 +1987,10 @@ on_stats (GstPromise *promise, gpointer user_data)
     /* Seconds in the spec, milliseconds on a screen. */
     if (gst_structure_get_double (s, "round-trip-time", &d) && d >= 0.0)
       st->rtt_ms = d * 1000.0;
-    if (gst_structure_get_uint64 (s, "packets-lost", &u))
-      st->lost += u;
+    /* G_TYPE_INT64 in gstwebrtcstats.c, signed because the spec lets duplicates
+     * drive it negative; the uint64 getter refuses the type and read 0 for ever. */
+    if (gst_structure_get_int64 (s, "packets-lost", &l) && l > 0)
+      st->lost += (guint64) l;
     if (gst_structure_get_uint64 (s, "packets-received", &u))
       st->recv += u;
     if (gst_structure_get_uint (s, "frame-width", &w) && w) {
@@ -2023,7 +2061,9 @@ build_strip (App *self)
 
   GtkWidget *state = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   gtk_widget_add_css_class (state, "cell");
-  self->strip_dot = gtk_label_new ("");
+  /* A box, not an empty label: an empty GtkLabel is still one text line tall,
+   * and the CSS disc came out as a pill. */
+  self->strip_dot = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
   gtk_widget_add_css_class (self->strip_dot, "beacon");
   gtk_widget_set_valign (self->strip_dot, GTK_ALIGN_CENTER);
   self->strip_state = gtk_label_new ("Starting");
@@ -2038,7 +2078,8 @@ build_strip (App *self)
    * the one thing worth a permanent line of pixels. */
   self->strip_readings = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
   gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("PATH", "—", &self->strip_path));
-  gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("LATENCY", "—", &self->strip_latency));
+  /* No LATENCY cell: a receive-only webrtcbin has no remote-inbound report and
+   * so no round-trip-time; the phone's card shows it from its own stats. */
   gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("BUFFER", "—", &self->strip_buffer));
   gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("PICTURE", "—", &self->strip_res));
   gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("LOSS", "—", &self->strip_loss));
@@ -2093,15 +2134,10 @@ build_toolbar (App *self)
   GtkWidget *quit = toolbar_button ("window-close-symbolic", "Disconnect");
   g_signal_connect (quit, "clicked", G_CALLBACK (on_disconnect_clicked), self);
 
-  GtkWidget *update = gtk_button_new_with_label ("Update");
-  gtk_widget_set_tooltip_text (update, "Check for a new version");
-  gtk_widget_add_css_class (update, "tool");
-  g_signal_connect (update, "clicked", G_CALLBACK (on_update_clicked), self);
 
   gtk_box_append (GTK_BOX (bar), self->record_button);
   gtk_box_append (GTK_BOX (bar), self->record_time);
   gtk_box_append (GTK_BOX (bar), self->live_status);
-  gtk_box_append (GTK_BOX (bar), update);
   gtk_box_append (GTK_BOX (bar), fullscreen);
   gtk_box_append (GTK_BOX (bar), quit);
   return bar;
@@ -2139,6 +2175,11 @@ activate (GtkApplication *app, gpointer user_data)
   }
 
   load_css ();
+  /* A selectable GtkLabel selects all its text when it takes keyboard focus,
+   * and the pairing code is the first focusable widget in the window -- so the
+   * code opened painted as one blue selection block. Mouse selection and
+   * copying still work with this off. */
+  g_object_set (gtk_settings_get_default (), "gtk-label-select-on-focus", FALSE, NULL);
 
   self->window = gtk_application_window_new (app);
   gtk_window_set_title (GTK_WINDOW (self->window), "aircast");
@@ -2312,9 +2353,19 @@ main (int argc, char *argv[])
    * case: nothing reads it, and pointing two FILE streams with two buffers at
    * one file interleaves them into nonsense. */
 #ifdef G_OS_WIN32
+  /* Read before AttachConsole, which may replace them: a handle the caller
+   * redirected (2> file) is kept, only an unset one is pointed at the console. */
+  HANDLE out0 = GetStdHandle (STD_OUTPUT_HANDLE);
+  HANDLE err0 = GetStdHandle (STD_ERROR_HANDLE);
+  gboolean out_set = out0 && out0 != INVALID_HANDLE_VALUE;
+  gboolean err_set = err0 && err0 != INVALID_HANDLE_VALUE;
   if (AttachConsole (ATTACH_PARENT_PROCESS)) {
-    freopen ("CONOUT$", "w", stdout);
-    freopen ("CONOUT$", "w", stderr);
+    if (!out_set)
+      freopen ("CONOUT$", "w", stdout);
+    if (!err_set)
+      freopen ("CONOUT$", "w", stderr);
+  } else if (err_set) {
+    /* No console but stderr was handed to us: leave it where it points. */
   } else {
     gchar *dir = g_build_filename (g_get_user_data_dir (), "aircast", NULL);
     g_mkdir_with_parents (dir, 0700);

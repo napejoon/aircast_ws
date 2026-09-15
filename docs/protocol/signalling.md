@@ -46,17 +46,24 @@ goes first.
    so a credential tied to the 300 s pairing window killed the relay
    allocation five minutes into a working mirror. It is unrelated to coturn's
    `stale-nonce`.
-5. Expire a code on a short TTL only while it is still unpaired. Once both
-   sides have been on it at the same time the pairing belongs to them until
-   both their sockets are gone: expiring a live pairing because the receiver's
-   socket blipped closed the sender's with "pairing expired" mid-cast, and the
-   rejoin that followed had nobody left to be offered to.
+5. Expire a code on a short TTL (`AIRCAST_TTL`, default 300 s) only while it is
+   still unpaired AND no receiver holds it. A receiver has the one code, on its
+   screen, and rejoins with it a second after any close, so expiring it retired
+   nothing and landed on the receiver at the instant its sender arrived. Once
+   both sides have been on a code at the same time the pairing belongs to them
+   until both sockets are gone. What does get closed is a receiver whose TURN
+   credential is older than half `AIRCAST_TURN_TTL` at the moment a sender
+   joins: it rejoins at once, and the rejoin is what mints it a fresh one --
+   a receiver kept on the credential of its first join fails every later cast
+   at the relay.
 
 ## Client obligations
 
-- ICE is `relay`-only. The sender sets `iceTransportPolicy: 'relay'`, so the
-  TURN entry from `joined` is the whole ICE configuration and a swap to a
-  managed TURN is a server-side change only.
+- ICE gathers host and relay candidates and lets a host pair win when both
+  work; the TURN entry from `joined` is what carries a cast on a network that
+  blocks the direct path. Relay-only is an opt-in on both ends
+  (`--relay-only` on the receiver, `--dart-define=AIRCAST_RELAY=true` on the
+  sender) and a mismatch is safe but pointless.
 - Codec preference is H.264 then VP8. VP8 is not optional: libwebrtc's Android
   AAR ships no software H.264, so a MediaTek or Unisoc phone has no H.264
   encoder at all.
