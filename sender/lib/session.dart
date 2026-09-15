@@ -86,6 +86,56 @@ class CastSession {
 
   Timer? _statsTimer;
 
+  /// The frame-rate cap currently written into the sender parameters.
+  ///
+  /// Sixty on a link that can carry it, thirty on one that cannot, and the
+  /// switch is made from the connection's own bandwidth estimate rather than
+  /// guessed at build time.
+  ///
+  /// Why it has to be us. libwebrtc will not make this trade itself above
+  /// 640x480: BALANCED's down-step asks MinFps first, which has no configured
+  /// value at these sizes and answers int max, so CanDecreaseFrameRateTo is
+  /// false and it falls through to dropping resolution — the same thing
+  /// MAINTAIN_FRAMERATE does. Whatever preference is named, a narrow path takes
+  /// pixels and never frames.
+  ///
+  /// And pixels are the wrong thing to give up here. Measured on the university
+  /// Wi-Fi: the estimate settles at 2.33 Mbit/s and the picture collapses to
+  /// 768x480 with "bw_adapted_res: true, cpu_adapted_res: false" — bandwidth,
+  /// not CPU and not QP. At 60 fps that budget is about 38 kbit a frame; at 30
+  /// it is 77, which is roughly twice the pixels for a screen that is mostly
+  /// still anyway. A mirror of a document at 30 fps beats a smooth one nobody
+  /// can read.
+  int _fpsCap = 60;
+
+  /// Hysteresis, and wide on purpose: switching frame rate reconfigures the
+  /// encoder, which costs a keyframe. The gap between the two thresholds has to
+  /// be bigger than the estimate's own wobble or a link sitting near the line
+  /// would rebuild the encoder every few seconds.
+  static const _dropFpsBelowBps = 4000000;
+  static const _raiseFpsAboveBps = 6000000;
+
+  Future<void> _adaptFrameRate(RTCPeerConnection pc, int? bwe) async {
+    if (bwe == null) return;
+    final want = bwe < _dropFpsBelowBps
+        ? 30
+        : (bwe > _raiseFpsAboveBps ? 60 : _fpsCap);
+    if (want == _fpsCap) return;
+
+    for (final sender in await pc.getSenders()) {
+      if (sender.track?.kind != 'video') continue;
+      final params = sender.parameters;
+      final encodings = params.encodings;
+      if (encodings == null || encodings.isEmpty) continue;
+      for (final e in encodings) {
+        e.maxFramerate = want;
+      }
+      await sender.setParameters(params);
+    }
+    debugPrint('aircast: frame cap $_fpsCap -> $want fps (estimate ${bwe ~/ 1000} kbit/s)');
+    _fpsCap = want;
+  }
+
   /// Reads the peer connection's own report and reduces it to the four numbers
   /// worth a person's attention.
   ///
@@ -101,7 +151,7 @@ class CastSession {
     final reports = await pc.getStats();
     String? localId;
     double? rttMs;
-    int? width, height, fps;
+    int? width, height, fps, bwe;
     var path = 'unknown';
 
     for (final r in reports) {
@@ -111,6 +161,8 @@ class CastSession {
         final rtt = v['currentRoundTripTime'];
         // Seconds in the spec, milliseconds on a screen.
         if (rtt is num) rttMs = rtt.toDouble() * 1000;
+        final b = v['availableOutgoingBitrate'];
+        if (b is num) bwe = b.toInt();
       } else if (r.type == 'outbound-rtp' && v['kind'] == 'video') {
         final w = v['frameWidth'], h = v['frameHeight'], f = v['framesPerSecond'];
         if (w is num) width = w.toInt();
@@ -127,7 +179,8 @@ class CastSession {
         path = t == 'host' ? 'Direct' : (t == 'relay' ? 'Relayed' : 'Direct (NAT)');
       }
     }
-    return CastStats(path: path, rttMs: rttMs, width: width, height: height, fps: fps);
+    return CastStats(
+        path: path, rttMs: rttMs, width: width, height: height, fps: fps, bwe: bwe);
   }
 
   Future<void> start() async {
@@ -194,7 +247,9 @@ class CastSession {
       if (live == null || onStats == null) return;
       try {
         final s = await _readStats(live);
-        if (s != null && _pc == live) onStats?.call(s);
+        if (s == null || _pc != live) return;
+        onStats?.call(s);
+        await _adaptFrameRate(live, s.bwe);
       } on Object catch (e) {
         // getStats throws on a connection closed between the tick and the
         // call. Nothing here is worth ending a cast over, and the UI simply
@@ -312,10 +367,16 @@ class CastSession {
         e.maxBitrate = maxBitrateBps;
         // A floor, so the first seconds are not soft: libwebrtc's congestion
         // control starts conservative and ramps, and for a screen that reads as
-        // a blurry open that slowly sharpens. 2 Mbit/s is well under the relay's
-        // 24 Mbit/s per-allocation cap and keeps text legible from the first
-        // frame. If the path genuinely cannot hold it, GCC still drops below.
-        e.minBitrate = 2000000;
+        // a blurry open that slowly sharpens.
+        //
+        // 600 k rather than the 2 M it was. The old figure was picked against a
+        // fast link, where it is free; on the university Wi-Fi the whole path
+        // estimates at 2.33 Mbit/s (control_handler.cc, "Bitrate estimate state
+        // changed, BWE: 2334880 bps"), so a floor of 2 M claims 86 per cent of
+        // everything there is and leaves congestion control nothing to probe
+        // with. A floor is meant to stop the opening frame being mush, which
+        // 600 k does; it is not meant to be most of the link.
+        e.minBitrate = 600000;
         // The tablet composites on a 16.67 ms grid and this cap was throwing
         // away every other tick. Of the 39,332 inter-frame RTP timestamp gaps
         // in one 28-minute receiver log, 17.6% are one tick, 47% two and 17.7%
@@ -428,6 +489,7 @@ class CastStats {
     this.width,
     this.height,
     this.fps,
+    this.bwe,
   });
 
   /// 'Direct', 'Direct (NAT)', 'Relayed', or 'unknown' before ICE settles.
@@ -442,8 +504,24 @@ class CastStats {
   final int? width, height;
   final int? fps;
 
-  String get pictureLabel =>
-      (width != null && height != null) ? '$width×$height' : '—';
+  /// What congestion control believes the path will carry, in bits per second.
+  /// Null on a connection that has not settled on a pair yet. This is the
+  /// number that decides the frame-rate cap, and the one that explains a small
+  /// picture on a slow network.
+  final int? bwe;
+
+  /// Size and rate together, because they are one trade and reading them apart
+  /// invites the wrong conclusion: 768×480 · 30 is the mirror choosing to stay
+  /// legible on a narrow link, not two separate things going wrong.
+  String get pictureLabel {
+    if (width == null || height == null) return '—';
+    return fps == null ? '$width×$height' : '$width×$height · $fps';
+  }
 
   String get rttLabel => rttMs == null ? '—' : '${rttMs!.round()} ms';
+
+  /// Megabits, to one decimal: the difference between 2.3 and 12 is the whole
+  /// story, and nobody needs the last six digits of it.
+  String get linkLabel =>
+      bwe == null ? '—' : '${(bwe! / 1000000).toStringAsFixed(1)} Mb/s';
 }

@@ -168,3 +168,17 @@
 "  font-feature-settings: 'tnum' 1;"
 "  color: #ff6b5e;"
 "}"
+
+/* The chevron that folds the readings away. Quieter than a toolbar button:
+ * it is a preference, not an action on the cast. */
+"button.strip-toggle {"
+"  min-width: 26px;"
+"  min-height: 26px;"
+"  margin: 0 6px;"
+"  color: #4E5661;"
+"}"
+
+"button.strip-toggle:hover {"
+"  background: #1B1F26;"
+"  color: #c9d1dc;"
+"}"

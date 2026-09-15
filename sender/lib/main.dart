@@ -445,16 +445,17 @@ class _StatGrid extends StatelessWidget {
           Row(
             children: [
               Expanded(child: _Stat(k: 'PATH', v: stats.path)),
-              Expanded(child: _Stat(k: 'LATENCY', v: stats.rttLabel)),
+              // The link estimate, because it is the number every other number
+              // on this card is downstream of: a small picture on a narrow link
+              // is the mirror working correctly, and this is what says so.
+              Expanded(child: _Stat(k: 'LINK', v: stats.linkLabel)),
             ],
           ),
           const SizedBox(height: 12),
           Row(
             children: [
+              Expanded(child: _Stat(k: 'LATENCY', v: stats.rttLabel)),
               Expanded(child: _Stat(k: 'PICTURE', v: stats.pictureLabel)),
-              Expanded(
-                child: _Stat(k: 'RATE', v: stats.fps == null ? '—' : '${stats.fps} fps'),
-              ),
             ],
           ),
         ],

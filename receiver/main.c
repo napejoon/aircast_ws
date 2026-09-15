@@ -118,6 +118,8 @@ typedef struct {
   GtkWidget *strip_res;         /* what the encoder is sending, right now */
   GtkWidget *strip_loss;        /* packets lost, as a share of those sent */
   GtkWidget *toolbar;           /* below the video rather than floating over it */
+  GtkWidget *strip_readings;    /* the six cells, foldable as a group */
+  GtkWidget *strip_toggle;      /* the chevron that folds them */
   guint stats_timer;            /* 1 Hz while a session is up, 0 otherwise */
   guint64 last_lost, last_recv; /* so loss reads per second, not per session */
   GtkWidget *update_label;      /* passive: last checked, highest version seen */
@@ -198,6 +200,7 @@ static void drop_session (App *self);
 /* Defined beside the strip they drive, used from the session code above it. */
 static void set_strip_state (App *self, const gchar *css, const gchar *text);
 static gboolean poll_stats (gpointer data);
+static void on_strip_toggled (GtkButton *button, App *self);
 
 /* ----------------------------------------------------------------- interface */
 
@@ -496,6 +499,9 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint code,
       return TRUE;
     case GDK_KEY_r:
       gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (self->record_button), !self->recording);
+      return TRUE;
+    case GDK_KEY_d:
+      on_strip_toggled (NULL, self);
       return TRUE;
     case GDK_KEY_Escape:
       if (gtk_window_is_fullscreen (GTK_WINDOW (self->window))) {
@@ -1215,6 +1221,9 @@ on_connected (GObject *session, GAsyncResult *result, gpointer user_data)
   send_json (self, b);
 
   set_status (self, "Waiting for a phone");
+  /* And the strip, which until now said "Starting" from launch until the first
+   * cast ended -- the one state it is never in once the socket is up. */
+  set_strip_state (self, NULL, "Waiting for a phone");
 }
 
 /* ------------------------------------------------------------------ pipeline */
@@ -1801,6 +1810,20 @@ build_live_page (App *self)
   return bezel;
 }
 
+/* Folds the readings away, leaving the state and the chevron that brings them
+ * back. The icon turns over with the state so the button says which way it
+ * goes rather than what it is. */
+static void
+on_strip_toggled (GtkButton *button, App *self)
+{
+  gboolean shown = !gtk_widget_get_visible (self->strip_readings);
+  gtk_widget_set_visible (self->strip_readings, shown);
+  gtk_button_set_icon_name (GTK_BUTTON (self->strip_toggle),
+      shown ? "go-down-symbolic" : "go-up-symbolic");
+  gtk_widget_set_tooltip_text (self->strip_toggle,
+      shown ? "Hide the readings (D)" : "Show the readings (D)");
+}
+
 /* The strip's state half, driven from wherever the session's state actually
  * changes rather than polled. `css` is the beacon's colour class. */
 static void
@@ -2009,17 +2032,28 @@ build_strip (App *self)
   gtk_box_append (GTK_BOX (state), self->strip_state);
   gtk_box_append (GTK_BOX (bar), state);
 
-  gtk_box_append (GTK_BOX (bar), strip_cell ("PATH", "—", &self->strip_path));
-  gtk_box_append (GTK_BOX (bar), strip_cell ("LATENCY", "—", &self->strip_latency));
-  gtk_box_append (GTK_BOX (bar), strip_cell ("BUFFER", "—", &self->strip_buffer));
-  gtk_box_append (GTK_BOX (bar), strip_cell ("PICTURE", "—", &self->strip_res));
-  gtk_box_append (GTK_BOX (bar), strip_cell ("LOSS", "—", &self->strip_loss));
+  /* The readings live in their own box so the whole group can be folded away
+   * without taking the state with it. Hiding the strip outright would leave no
+   * handle to bring it back and no answer to "am I still connected", which is
+   * the one thing worth a permanent line of pixels. */
+  self->strip_readings = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("PATH", "—", &self->strip_path));
+  gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("LATENCY", "—", &self->strip_latency));
+  gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("BUFFER", "—", &self->strip_buffer));
+  gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("PICTURE", "—", &self->strip_res));
+  gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("LOSS", "—", &self->strip_loss));
+  gtk_box_append (GTK_BOX (bar), self->strip_readings);
 
   /* Eats the slack, so the readings stay left and do not spread out across a
    * wide window with a hand's width between them. */
   GtkWidget *spacer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
   gtk_widget_set_hexpand (spacer, TRUE);
   gtk_box_append (GTK_BOX (bar), spacer);
+
+  self->strip_toggle = toolbar_button ("go-down-symbolic", "Hide the readings (D)");
+  gtk_widget_add_css_class (self->strip_toggle, "strip-toggle");
+  g_signal_connect (self->strip_toggle, "clicked", G_CALLBACK (on_strip_toggled), self);
+  gtk_box_append (GTK_BOX (bar), self->strip_toggle);
 
   return bar;
 }
