@@ -75,6 +75,61 @@ class CastSession {
   /// and silently otherwise.
   void Function(RTCPeerConnectionState state)? onState;
 
+  /// Once a second while the connection is up, so the phone can show the same
+  /// readings the desktop does.
+  ///
+  /// Both ends showing one number is the point. When the picture is small or
+  /// slow the two people looking at it are usually looking at different
+  /// screens, and "is it me or is it you" is not a question either end could
+  /// answer before this existed.
+  void Function(CastStats stats)? onStats;
+
+  Timer? _statsTimer;
+
+  /// Reads the peer connection's own report and reduces it to the four numbers
+  /// worth a person's attention.
+  ///
+  /// The path is the one that decides everything else: a host pair is a hop on
+  /// the same network, a relayed pair is a round trip through a machine in
+  /// another country, and it is the only thing on this list a user can act on —
+  /// by putting both ends on the same Wi-Fi.
+  ///
+  /// Read from the SELECTED pair rather than from the candidate list, because a
+  /// connection gathers relay candidates it never uses; `state == 'succeeded'`
+  /// is the one ICE actually settled on. Its local candidate carries the type.
+  Future<CastStats?> _readStats(RTCPeerConnection pc) async {
+    final reports = await pc.getStats();
+    String? localId;
+    double? rttMs;
+    int? width, height, fps;
+    var path = 'unknown';
+
+    for (final r in reports) {
+      final v = r.values;
+      if (r.type == 'candidate-pair' && v['state'] == 'succeeded') {
+        localId = v['localCandidateId'] as String?;
+        final rtt = v['currentRoundTripTime'];
+        // Seconds in the spec, milliseconds on a screen.
+        if (rtt is num) rttMs = rtt.toDouble() * 1000;
+      } else if (r.type == 'outbound-rtp' && v['kind'] == 'video') {
+        final w = v['frameWidth'], h = v['frameHeight'], f = v['framesPerSecond'];
+        if (w is num) width = w.toInt();
+        if (h is num) height = h.toInt();
+        if (f is num) fps = f.round();
+      }
+    }
+    if (localId != null) {
+      for (final r in reports) {
+        if (r.id != localId) continue;
+        final t = r.values['candidateType'] as String?;
+        // libwebrtc's own spelling, passed through rather than prettied up
+        // anywhere but here: host, srflx, prflx, relay.
+        path = t == 'host' ? 'Direct' : (t == 'relay' ? 'Relayed' : 'Direct (NAT)');
+      }
+    }
+    return CastStats(path: path, rttMs: rttMs, width: width, height: height, fps: fps);
+  }
+
   Future<void> start() async {
     final turn = await _signaling.turn;
 
@@ -126,6 +181,28 @@ class CastSession {
     await _capBitrate(pc);
 
     pc.onConnectionState = (state) => onState?.call(state);
+
+    // One second, which is slow enough that getStats costs nothing and fast
+    // enough that a reading is never stale by the time it is read. Started
+    // here rather than on the connected state because the report is useful
+    // before then too: until ICE picks a pair there is no selected candidate
+    // and _readStats returns "unknown", which is the honest answer while a
+    // connection is still being negotiated.
+    _statsTimer?.cancel();
+    _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      final live = _pc;
+      if (live == null || onStats == null) return;
+      try {
+        final s = await _readStats(live);
+        if (s != null && _pc == live) onStats?.call(s);
+      } on Object catch (e) {
+        // getStats throws on a connection closed between the tick and the
+        // call. Nothing here is worth ending a cast over, and the UI simply
+        // keeps the last reading until the next tick replaces it.
+        debugPrint('aircast: stats read failed: $e');
+      }
+    });
+
     pc.onIceCandidate = (c) => _signaling.sendCandidate(c.toMap().cast<String, dynamic>());
     _signaling.onAnswer = (sdp) async =>
         pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
@@ -314,6 +391,9 @@ class CastSession {
   }
 
   Future<void> stop() async {
+    // Before the connection goes: the tick calls getStats on it.
+    _statsTimer?.cancel();
+    _statsTimer = null;
     for (final track in _stream?.getTracks() ?? const <MediaStreamTrack>[]) {
       await track.stop();
     }
@@ -332,4 +412,38 @@ class CastSession {
     // when start() never got as far as raising it.
     if (Platform.isAndroid) await UsbCast.stop();
   }
+}
+
+/// What the phone shows about a cast in progress, and the same four readings
+/// the desktop puts in its own strip.
+///
+/// Immutable and rebuilt each second rather than mutated, so a widget that
+/// holds one is holding a consistent set: a half-updated reading would show a
+/// new resolution beside the old round trip, which is worse than showing
+/// nothing.
+class CastStats {
+  const CastStats({
+    required this.path,
+    this.rttMs,
+    this.width,
+    this.height,
+    this.fps,
+  });
+
+  /// 'Direct', 'Direct (NAT)', 'Relayed', or 'unknown' before ICE settles.
+  final String path;
+
+  /// Round trip on the selected pair. Null until there is a selected pair.
+  final double? rttMs;
+
+  /// What the encoder is actually sending, which is not the screen's size:
+  /// libwebrtc's quality scaler takes resolution away when QP rises, and this
+  /// is where that becomes visible instead of mysterious.
+  final int? width, height;
+  final int? fps;
+
+  String get pictureLabel =>
+      (width != null && height != null) ? '$width×$height' : '—';
+
+  String get rttLabel => rttMs == null ? '—' : '${rttMs!.round()} ms';
 }

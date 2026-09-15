@@ -69,6 +69,11 @@ class _SenderPageState extends State<SenderPage> {
   String _status = 'Enter the code shown on the desktop';
   bool _settingsOpen = false;
 
+  /// The last reading from the peer connection, or null before the first one.
+  /// Kept rather than streamed into the widget so a rebuild for any other
+  /// reason still has the numbers to draw.
+  CastStats? _stats;
+
   bool get _casting => _session != null || _usb;
 
   @override
@@ -114,6 +119,11 @@ class _SenderPageState extends State<SenderPage> {
       _status = 'Connecting…';
     });
     signaling.onClosed = (reason) => _stop(status: reason);
+    session.onStats = (s) {
+      // A tick can land after the widget is gone, and after _stop has replaced
+      // the session: both would be a setState on a dead State.
+      if (mounted && _session == session) setState(() => _stats = s);
+    };
     session.onState = (state) {
       if (!mounted) return;
       switch (state) {
@@ -187,6 +197,9 @@ class _SenderPageState extends State<SenderPage> {
       _connected = false;
       _busy = false;
       _status = status;
+      // Cleared, not kept. A reading left over from a cast that ended reads as
+      // a cast still running.
+      _stats = null;
     });
   }
 
@@ -214,7 +227,12 @@ class _SenderPageState extends State<SenderPage> {
                 Expanded(
                   child: Center(
                     child: _casting
-                        ? _CastingCard(code: _code.text, usb: _usb, connected: _connected)
+                        ? _CastingCard(
+                            code: _code.text,
+                            usb: _usb,
+                            connected: _connected,
+                            stats: _stats,
+                          )
                         : _CodeCard(controller: _code, onSubmit: _castOverNetwork),
                   ),
                 ),
@@ -371,11 +389,17 @@ class _CodeCard extends StatelessWidget {
 }
 
 class _CastingCard extends StatelessWidget {
-  const _CastingCard({required this.code, required this.usb, required this.connected});
+  const _CastingCard({
+    required this.code,
+    required this.usb,
+    required this.connected,
+    this.stats,
+  });
 
   final String code;
   final bool usb;
   final bool connected;
+  final CastStats? stats;
 
   @override
   Widget build(BuildContext context) => _Card(
@@ -396,6 +420,78 @@ class _CastingCard extends StatelessWidget {
           Text(
             connected ? 'Your screen is being mirrored' : 'Setting up…',
             style: const TextStyle(fontSize: 13, color: _muted),
+          ),
+          // The same four readings the desktop puts along its bottom edge.
+          // Only on the WebRTC path: the USB one has no peer connection to ask,
+          // and a grid of dashes says less than no grid at all.
+          if (!usb && stats != null) ...[
+            const SizedBox(height: 18),
+            _StatGrid(stats: stats!),
+          ],
+        ],
+      );
+}
+
+/// Two by two, because four readings in a row on a phone are four columns too
+/// narrow to hold "2304×1440".
+class _StatGrid extends StatelessWidget {
+  const _StatGrid({required this.stats});
+
+  final CastStats stats;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        children: [
+          Row(
+            children: [
+              Expanded(child: _Stat(k: 'PATH', v: stats.path)),
+              Expanded(child: _Stat(k: 'LATENCY', v: stats.rttLabel)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _Stat(k: 'PICTURE', v: stats.pictureLabel)),
+              Expanded(
+                child: _Stat(k: 'RATE', v: stats.fps == null ? '—' : '${stats.fps} fps'),
+              ),
+            ],
+          ),
+        ],
+      );
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat({required this.k, required this.v});
+
+  final String k;
+  final String v;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(height: 1, color: _edge),
+          const SizedBox(height: 7),
+          Text(
+            k,
+            style: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.6,
+              color: _muted,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            v,
+            // Tabular, so a value that changes every second does not shuffle
+            // the one beside it sideways as digits swap width.
+            style: const TextStyle(
+              fontSize: 14,
+              color: _ink,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
           ),
         ],
       );
