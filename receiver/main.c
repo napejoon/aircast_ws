@@ -32,6 +32,7 @@
 
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
+#include <stdio.h>              /* freopen and setvbuf, for the log file */
 #include <string.h>
 
 #ifdef G_OS_WIN32
@@ -465,7 +466,30 @@ on_fullscreen_clicked (GtkButton *button, App *self)
 static void
 on_disconnect_clicked (GtkButton *button, App *self)
 {
-  gtk_window_close (GTK_WINDOW (self->window));
+  /* Ends the cast, not the program. The button is labelled Disconnect and it
+   * used to close the window, which quit -- so the only way back to the code
+   * was to start aircast again. Everything this does the "bye" branch of
+   * on_message already did when the phone hung up first; this is the same
+   * teardown driven from the other end, and the signalling socket is
+   * deliberately left open so the next cast needs no reconnect.
+   *
+   * The phone is told first. It reads "bye" as the receiver hanging up
+   * (signaling.dart:135) and stops its own capture, which is what makes the
+   * MediaProjection notification go away rather than leaving a phone quietly
+   * mirroring into a window that stopped listening. Sent before the local
+   * teardown because send_json posts to the main loop, and drop_session must
+   * not have cleared the connection out from under the frame by then. */
+  JsonBuilder *b = json_builder_new ();
+  json_builder_begin_object (b);
+  json_builder_set_member_name (b, "type");
+  json_builder_add_string_value (b, "bye");
+  json_builder_end_object (b);
+  send_json (self, b);        /* takes the builder */
+
+  stop_recording (self);
+  show_page (self, "idle");
+  set_status (self, "Ready for the next cast");
+  drop_session (self);
 }
 
 static gboolean
@@ -1978,6 +2002,38 @@ main (int argc, char *argv[])
         "the sender needs AIRCAST_RELAY=true to match", NULL },
     { NULL },
   };
+
+  /* Somewhere for the output to go, now that this is a GUI-subsystem binary
+   * (receiver/CMakeLists.txt) and double-clicking it no longer opens a console
+   * beside the window. A GUI process starts with no console attached at all,
+   * so stderr is a closed handle and every g_printerr and every GStreamer
+   * warning would be thrown away -- including the ones that diagnosed every
+   * problem this project has had.
+   *
+   * Two cases, and the first is why this is not simply a log file. Started
+   * from a terminal, AttachConsole borrows the parent's console and the output
+   * appears there exactly as it did before the subsystem changed, so
+   * `aircast-receiver --help` and a debugging run still work. Started from the
+   * shell or a shortcut there is no parent console, and stderr goes to
+   * receiver.log under the user's data directory, truncated each run so it is
+   * the last session rather than a year of them. stdout is left alone in that
+   * case: nothing reads it, and pointing two FILE streams with two buffers at
+   * one file interleaves them into nonsense. */
+#ifdef G_OS_WIN32
+  if (AttachConsole (ATTACH_PARENT_PROCESS)) {
+    freopen ("CONOUT$", "w", stdout);
+    freopen ("CONOUT$", "w", stderr);
+  } else {
+    gchar *dir = g_build_filename (g_get_user_data_dir (), "aircast", NULL);
+    g_mkdir_with_parents (dir, 0700);
+    gchar *path = g_build_filename (dir, "receiver.log", NULL);
+    if (freopen (path, "w", stderr))
+      /* Line buffered, so a crash still leaves the line that preceded it. */
+      setvbuf (stderr, NULL, _IOLBF, 0);
+    g_free (path);
+    g_free (dir);
+  }
+#endif
 
   GOptionContext *ctx = g_option_context_new ("- aircast receiver");
   g_option_context_add_main_entries (ctx, entries, NULL);

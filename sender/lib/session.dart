@@ -18,8 +18,34 @@ class CastSession {
 
   final Signaling _signaling;
 
-  /// 6 Mbit/s, the 1080p ceiling from #8.
-  static const maxBitrateBps = 6000000;
+  /// 12 Mbit/s. It was 6, "the 1080p ceiling from #8", and that number was
+  /// chosen for a stream this one outgrew: 1920x1080 is 2.07 Mpixel and the
+  /// tablet sends 2304x1440, which is 3.32, and the frame rate cap went from 30
+  /// to 60 in the same week. Three and a quarter times the pixels per second
+  /// through an unchanged ceiling.
+  ///
+  /// What that costs is not softness, which would be the honest trade, but
+  /// size. The encoder answers a ceiling it cannot meet by raising QP, and
+  /// libwebrtc's QualityScaler reads QP and takes the resolution away.
+  /// Measured on the device with a cast live: it opens AT the source,
+  /// 2304x1440, and quality_scaler.cc drives it down three steps in 607 ms to
+  /// 768x480, holds there fifteen seconds, and regains the source only
+  /// forty-four seconds in. Congestion is not involved -- every
+  /// video_stream_encoder.cc report across that window reads "dropped (due to
+  /// congestion window pushback) 0". The receiver paints what it is sent at 1:1
+  /// (receiver/main.c build_live_page), so the user watches a small picture
+  /// grow for the first minute of every cast.
+  ///
+  /// 12 rather than the 20 the arithmetic alone would ask for. This is a
+  /// ceiling and not a demand -- GCC still sets the actual rate and drops below
+  /// it on a path that cannot hold it -- but the receiver has to decode
+  /// whatever does arrive, and one notebook log already carries 123 QoS frame
+  /// drops and "this computer is too slow" beside a D3D11 video device that
+  /// failed to open with E_NOINTERFACE. Doubling is enough to move QP off the
+  /// floor that triggers the scaler; going further is a question to settle
+  /// after that decode path is understood, not before. Still well under the
+  /// relay's 24 Mbit/s per-allocation cap (ops/turnserver.conf.template).
+  static const maxBitrateBps = 12000000;
 
   /// Direct first, relay when direct cannot be had, matching the receiver's
   /// own default. This was relay-only on the grounds that neither peer would
