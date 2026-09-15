@@ -71,15 +71,19 @@ goes first.
 ## Abuse
 
 A 6-digit code is a guessable space, so the code is not a secret — the server
-is the defence. It charges a *miss* to a **sender** that joins a code no
-receiver is waiting on, and refuses a client past `AIRCAST_MAX_MISSES`
-(default 10) misses per minute.
+is the defence. It charges a *miss* to **every join**, either role, and refuses
+a client past `AIRCAST_MAX_MISSES` (default 10) misses per minute.
 
-The role matters and was once written the other way round. The receiver invents
-the code and displays it, so the receiver is always first and its code is never
-"already waiting" — charging it meant every ordinary start of the program spent
-one of its own ten attempts, while the sender, the only side that can type a
-code it does not know, was never charged at all.
+Every join, not only a sender's. The rule was once "a sender that joins a code
+no receiver is waiting on", which left the door open on the side that does not
+type codes: a receiver's join was never a miss, so a client joining as a
+receiver could walk the whole six-digit space for free and be told "that role
+is already taken" for every code somebody was really waiting on and `joined`
+for the rest — exactly
+the oracle the throttle exists to deny. A join is also what mints a TURN
+credential, so an uncharged role was an unmetered credential mint. The cost to
+an honest receiver is one of its ten attempts per minute at start-up, which it
+never notices.
 
 Behind a reverse proxy every connection arrives from loopback, so the server
 trusts `X-Forwarded-For` **only** when the peer address is loopback, and reads
