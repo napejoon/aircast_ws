@@ -235,6 +235,22 @@ show_page (App *self, const gchar *page)
    * no picture to record. */
   if (self->toolbar)
     gtk_widget_set_visible (self->toolbar, g_str_equal (page, "live"));
+  /* And fullscreen belongs to the mirror, so leaving the mirror leaves it.
+   *
+   * The line above is what makes this necessary: the only visible way out of
+   * fullscreen is the button on that toolbar, and hiding the toolbar while the
+   * window is still fullscreen leaves an idle card on a screen with no title
+   * bar, no close button and no control of any kind. on_fullscreen_changed
+   * says a fullscreen window with no visible way out is a trap and keeps the
+   * toolbar for exactly that reason; this path was taking it away again.
+   *
+   * It is reached by every route off the live page -- Disconnect, the phone
+   * hanging up, a failed connection, and the one that found it: the signalling
+   * socket closing mid-cast, which shows the pairing code again under
+   * "Reconnecting" with nothing to press. */
+  if (self->window && !g_str_equal (page, "live")
+      && gtk_window_is_fullscreen (GTK_WINDOW (self->window)))
+    gtk_window_unfullscreen (GTK_WINDOW (self->window));
 }
 
 static void
