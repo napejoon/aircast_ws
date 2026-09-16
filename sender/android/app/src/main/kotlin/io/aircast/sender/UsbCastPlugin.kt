@@ -32,6 +32,12 @@ class UsbCastPlugin(
         UsbCastService.onStopped = { c.invokeMethod("stopped", null) }
     }
     private var pending: MethodChannel.Result? = null
+
+    /**
+     * The closure this plugin last put in [UsbCastService.onForeground], kept
+     * so that nothing here clears a registration belonging to somebody else.
+     */
+    private var foregroundWait: (() -> Unit)? = null
     private var socketName = "aircast"
     private var bitrate = 6_000_000
 
@@ -114,17 +120,20 @@ class UsbCastPlugin(
                 val timeout = Runnable {
                     if (!answered) {
                         answered = true
-                        UsbCastService.onForeground = null
+                        clearForegroundWait()
                         result.error("foreground", "the cast service did not reach the foreground in 5 s", null)
                     }
                 }
-                UsbCastService.onForeground = {
+                val wait = {
                     if (!answered) {
                         answered = true
                         handler.removeCallbacks(timeout)
+                        foregroundWait = null
                         result.success(null)
                     }
                 }
+                foregroundWait = wait
+                UsbCastService.onForeground = wait
                 handler.postDelayed(timeout, 5_000)
                 // Keeping the screen on — Android stops a projection when it
                 // locks — is the service's job (UsbCastService.keepScreenOn): a
@@ -188,7 +197,28 @@ class UsbCastPlugin(
     fun dispose() {
         // Left set, the closure answers on a channel whose engine has gone.
         UsbCastService.onStopped = null
+        clearForegroundWait()
+        // A consent dialog still up when the engine goes leaves this result
+        // held by nobody: the Dart future behind UsbCast.start() never
+        // completes, and the card that awaits it sits on "Starting" for the
+        // life of the app. Answering it costs one dropped reply in the case
+        // where Dart has gone too, which Flutter logs and ignores.
+        pending?.error("gone", "the window went away before consent came back", null)
+        pending = null
         channel.setMethodCallHandler(null)
+    }
+
+    /**
+     * Clears [UsbCastService.onForeground] only if it is the closure this
+     * plugin put there. The field is static and outlives a Flutter engine, so
+     * a timeout firing late -- or an activity being destroyed -- would
+     * otherwise unregister the *next* engine's wait, and its holdForeground
+     * would then time out five seconds after a service that reached the
+     * foreground immediately.
+     */
+    private fun clearForegroundWait() {
+        if (UsbCastService.onForeground === foregroundWait) UsbCastService.onForeground = null
+        foregroundWait = null
     }
 
     private companion object {
