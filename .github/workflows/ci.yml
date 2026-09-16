@@ -29,7 +29,7 @@ jobs:
       - name: Test
         # tools/ carries the end-to-end test: two real WebRTC peers pair through
         # the real server and decoded video has to move.
-        run: pytest server tools -q --asyncio-mode=auto
+        run: pytest -q
 
   receiver:
     name: receiver (GTK4 + GStreamer)

@@ -9,6 +9,18 @@ import 'package:flutter/services.dart';
 class UsbCast {
   static const _channel = MethodChannel('io.aircast.sender/usb');
 
+  /// Asks for POST_NOTIFICATIONS. The manifest has declared it since the
+  /// foreground service existed and nothing ever requested it, so on Android 13
+  /// and later the cast notification — the only part of aircast a user sees
+  /// while mirroring some other app — has never once been displayed.
+  ///
+  /// Call it when the app opens, not when a cast starts: the answer has to be
+  /// in before the service posts, because a notification refused at enqueue is
+  /// dropped rather than held. The future completes as soon as the dialog is up
+  /// and carries no answer, because there is nothing to do with a refusal — a
+  /// mediaProjection foreground service runs either way.
+  static Future<void> askToNotify() => _channel.invokeMethod('askToNotify');
+
   /// Asks for screen-capture consent and starts the foreground service.
   /// Returns once the socket is listening; the receiver may connect at any
   /// time after that.
@@ -25,4 +37,13 @@ class UsbCast {
 
   /// Stops the capture and releases the service, on either path.
   static Future<void> stop() => _channel.invokeMethod('stop');
+
+  /// Android ending the capture without being asked: consent revoked from the
+  /// cast chip, another app taking the projection, the screen locking. Until
+  /// this existed the UI went on showing a live cast that had already stopped,
+  /// which is the one thing a mirroring app must not get wrong.
+  static set onStopped(void Function() handler) =>
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'stopped') handler();
+      });
 }

@@ -78,4 +78,44 @@ void main() {
     await signaling.close();
     await server.close(force: true);
   });
+
+  test('every peer frame after the first is a receiver to offer to again', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final socket = Completer<WebSocket>();
+
+    server.transform(WebSocketTransformer()).listen((ws) {
+      socket.complete(ws);
+      ws.listen((raw) {
+        if ((jsonDecode(raw as String) as Map<String, dynamic>)['type'] != 'join') return;
+        ws.add(jsonEncode({
+          'type': 'joined',
+          'turn': {'urls': <String>[], 'username': 'u', 'credential': 'c'},
+        }));
+        ws.add(jsonEncode({'type': 'peer'}));
+      });
+    });
+
+    final signaling = Signaling(Uri.parse('ws://127.0.0.1:${server.port}'), '123456');
+    final rejoined = Completer<void>();
+    var rejoins = 0;
+    signaling.onPeerRejoined = () {
+      rejoins++;
+      if (!rejoined.isCompleted) rejoined.complete();
+    };
+    await signaling.connect();
+
+    // The first one is the receiver this cast is for. It releases start(),
+    // which offers once, and it is not a re-offer.
+    await signaling.peerJoined;
+    expect(rejoins, 0);
+
+    // The second is that receiver back with a pipeline it has just rebuilt,
+    // which nothing but a new offer can reach.
+    (await socket.future).add(jsonEncode({'type': 'peer'}));
+    await rejoined.future.timeout(const Duration(seconds: 5));
+    expect(rejoins, 1);
+
+    await signaling.close();
+    await server.close(force: true);
+  });
 }

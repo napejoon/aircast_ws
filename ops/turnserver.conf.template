@@ -152,10 +152,39 @@ no-cli
 # Tune after the first real session; raise if legitimate calls start failing.
 # Hitting total-quota appears in the log as a 486 Allocation Quota Reached.
 # NOTE THE UNIT: coturn's --max-bps and --bps-capacity are BYTES per second,
-# not bits. 1000000 B/s = 8 Mbit/s. #8 caps the sender at 6 Mbit/s (1080p
-# preset), so this leaves headroom without being unlimited.
-max-bps=1000000          # 8 Mbit/s per allocation — above #8's 1080p ceiling
-bps-capacity=50000000    # 400 Mbit/s global; only meaningful alongside max-bps
+# not bits. 3000000 B/s = 24 Mbit/s.
+#
+# This was 1000000 (8 Mbit/s), chosen because #8 caps the sender at 6 Mbit/s.
+# That reasoning was wrong twice. max-bps is not a rate an average has to sit
+# under: ioa_socket_check_bandwidth() in src/apps/relay/ns_ioalib_engine_impl.c
+# keeps a byte counter it zeroes only when the engine's jiffie changes, and the
+# jiffie is advanced by a one-second timer - set_ioa_timer(e, 1, 0,
+# timer_handler, e, 1, "timer_handler") in the same file - so it is a hard
+# budget for each wall-clock second, per socket, per direction, with nothing
+# carried over. And a 6 Mbit/s encoder ceiling is not a 6 Mbit/s second: a key
+# frame lands its burst inside one, and retransmissions, the RTP and SRTP
+# headers and the 4-byte ChannelData header ride on top of the encoder's
+# number. Fourteen seconds of one twenty-three-minute cast went past 1000000
+# B/s, the busiest at 1113949. Under the old ceiling the excess was discarded
+# inside the relay and nothing said so - the over-budget branch is commented
+# "Bandwidth exhausted, we pretend everything is fine" and reports the send as
+# successful - so the only symptom at the far end was bursts of consecutive RTP
+# sequence numbers that never arrived: 11% of packets, 6.3% still gone after
+# retransmission.
+#
+# An abuse ceiling is a bill limiter for a leaked credential, not congestion
+# control, and coturn enforces it by dropping media rather than by refusing the
+# session, so it has to clear the worst legitimate second by a wide margin or
+# it breaks the product silently. 3000000 is about 2.7x the busiest measured.
+#
+# WATCH THE PAIR: bps-capacity is reserved per allocation at ALLOCATE time
+# (allocate_bps() in src/apps/relay/netengine.c), so it divides by max-bps into
+# the number of allocations that can be granted at all - 50000000/3000000 is
+# sixteen at the full rate, one on the remainder, then 486 Allocation Bandwidth
+# Quota Reached. Relay-only ICE allocates at both ends, so that is fewer
+# concurrent casts than total-quota=100 suggests. Raise the two together.
+max-bps=3000000          # 24 Mbit/s per allocation, 2.7x the busiest second
+bps-capacity=50000000    # 400 Mbit/s global; with max-bps above, 17 allocations
 total-quota=100          # global concurrent allocations
 user-quota=20            # per opaque-id — deliberately loose, ICE can need several
 

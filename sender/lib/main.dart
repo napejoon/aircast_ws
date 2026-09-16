@@ -69,7 +69,32 @@ class _SenderPageState extends State<SenderPage> {
   String _status = 'Enter the code shown on the desktop';
   bool _settingsOpen = false;
 
+  /// The last reading from the peer connection, or null before the first one.
+  /// Kept rather than streamed into the widget so a rebuild for any other
+  /// reason still has the numbers to draw.
+  CastStats? _stats;
+
   bool get _casting => _session != null || _usb;
+
+  @override
+  void initState() {
+    super.initState();
+    if (Platform.isAndroid) {
+      // Fires when Android takes the capture away — consent revoked, the screen
+      // locking, another app claiming the projection — and now also when the
+      // user presses Stop in the notification. That second case is why the
+      // wording no longer blames Android: it would be a lie in the commonest
+      // case there is, someone ending their own cast from the shade.
+      UsbCast.onStopped = () => _stop(status: 'Mirroring stopped');
+      // Asked here rather than when a cast begins: the answer has to be in
+      // before the service posts, since a notification refused at enqueue is
+      // dropped and not held, and every moment inside a cast is either racing
+      // the capture-consent dialog or sitting inside the foreground-service
+      // deadline. Not awaited, because a refusal changes nothing we do and no
+      // cast should wait on a dialog it does not need.
+      UsbCast.askToNotify();
+    }
+  }
 
   Future<void> _castOverNetwork() async {
     final code = _code.text.trim();
@@ -77,7 +102,15 @@ class _SenderPageState extends State<SenderPage> {
       return setState(() => _status = 'The code is six digits');
     }
 
-    final signaling = Signaling(Uri.parse(_url.text.trim()), code);
+    // tryParse, because parse throws and this line sits outside the try below:
+    // a non-numeric port typed into the settings field made the button do
+    // nothing at all. The FormatException completed a Future nobody holds, and
+    // the status line went on inviting the user to enter a code.
+    final url = Uri.tryParse(_url.text.trim());
+    if (url == null) {
+      return setState(() => _status = 'That server address is not a URL');
+    }
+    final signaling = Signaling(url, code);
     final session = CastSession(signaling);
     setState(() {
       _signaling = signaling;
@@ -86,6 +119,11 @@ class _SenderPageState extends State<SenderPage> {
       _status = 'Connecting…';
     });
     signaling.onClosed = (reason) => _stop(status: reason);
+    session.onStats = (s) {
+      // A tick can land after the widget is gone, and after _stop has replaced
+      // the session: both would be a setState on a dead State.
+      if (mounted && _session == session) setState(() => _stats = s);
+    };
     session.onState = (state) {
       if (!mounted) return;
       switch (state) {
@@ -96,7 +134,13 @@ class _SenderPageState extends State<SenderPage> {
             _status = 'Mirroring to $code';
           });
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-          _stop(status: 'The connection failed — is the relay reachable?');
+          // Names the host it failed on. The line used to ask the user "is the
+          // relay reachable?", which is a question only the app is in a
+          // position to answer, and it named nothing they could go and check.
+          _stop(
+            status: 'Cannot reach ${url.host}. Check the server address, '
+                'or try another network',
+          );
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
           setState(() {
             _connected = false;
@@ -135,17 +179,33 @@ class _SenderPageState extends State<SenderPage> {
   }
 
   Future<void> _stop({String status = 'Enter the code shown on the desktop'}) async {
-    await _session?.stop();
-    await _signaling?.close();
-    if (_usb) await UsbCast.stop();
+    // Take the session out of the fields before the first await. Everything
+    // that calls this arrives late and unordered: a connect that timed out ten
+    // seconds ago, an onClosed from a socket already gone, a Failed from a peer
+    // connection we just closed. Each of them used to read whatever _session
+    // held at the moment it ran, which by then could be the cast the user
+    // started afterwards, so a timeout from an abandoned attempt stopped a live
+    // one. Whoever arrives first owns the teardown; everyone else finds nothing
+    // and returns.
+    final session = _session;
+    final signaling = _signaling;
+    final usb = _usb;
+    if (session == null && signaling == null && !usb) return;
+    _session = null;
+    _signaling = null;
+    _usb = false;
+
+    await session?.stop();
+    await signaling?.close();
+    if (usb) await UsbCast.stop();
     if (!mounted) return;
     setState(() {
-      _session = null;
-      _signaling = null;
-      _usb = false;
       _connected = false;
       _busy = false;
       _status = status;
+      // Cleared, not kept. A reading left over from a cast that ended reads as
+      // a cast still running.
+      _stats = null;
     });
   }
 
@@ -173,7 +233,12 @@ class _SenderPageState extends State<SenderPage> {
                 Expanded(
                   child: Center(
                     child: _casting
-                        ? _CastingCard(code: _code.text, usb: _usb, connected: _connected)
+                        ? _CastingCard(
+                            code: _code.text,
+                            usb: _usb,
+                            connected: _connected,
+                            stats: _stats,
+                          )
                         : _CodeCard(controller: _code, onSubmit: _castOverNetwork),
                   ),
                 ),
@@ -315,26 +380,55 @@ class _CodeCard extends StatelessWidget {
             ),
             decoration: const InputDecoration(
               counterText: '',
-              hintText: '000000',
-              hintStyle: TextStyle(
-                fontSize: 44,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 10,
-                color: Color(0xFF2B3038),
-              ),
               border: InputBorder.none,
             ),
+          ),
+          const SizedBox(height: 10),
+          // The hint used to be a dimmed 000000 in the same face and size as a
+          // typed code, which reads as a value already entered rather than as
+          // an empty field. Six marks say the same thing -- this many digits,
+          // this many still to go -- without pretending to be digits.
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (_, value, __) => _Slots(filled: value.text.length),
           ),
         ],
       );
 }
 
+/// Six marks under the field, filled from the left as digits arrive.
+class _Slots extends StatelessWidget {
+  const _Slots({required this.filled});
+
+  final int filled;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(
+          6,
+          (i) => Container(
+            width: 20,
+            height: 2,
+            margin: const EdgeInsets.symmetric(horizontal: 3),
+            color: i < filled ? _muted : _edge,
+          ),
+        ),
+      );
+}
+
 class _CastingCard extends StatelessWidget {
-  const _CastingCard({required this.code, required this.usb, required this.connected});
+  const _CastingCard({
+    required this.code,
+    required this.usb,
+    required this.connected,
+    this.stats,
+  });
 
   final String code;
   final bool usb;
   final bool connected;
+  final CastStats? stats;
 
   @override
   Widget build(BuildContext context) => _Card(
@@ -342,7 +436,13 @@ class _CastingCard extends StatelessWidget {
           Icon(usb ? Icons.usb : Icons.screen_share_outlined, size: 34, color: _muted),
           const SizedBox(height: 16),
           Text(
-            usb ? 'Cable' : code,
+            // Grouped the way the desktop shows it, so the two screens read as
+            // the same number rather than as two strings that happen to match.
+            usb
+                ? 'Cable'
+                : code.length == 6
+                    ? '${code.substring(0, 3)} ${code.substring(3)}'
+                    : code,
             style: const TextStyle(
               fontSize: 40,
               fontWeight: FontWeight.w700,
@@ -354,7 +454,83 @@ class _CastingCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             connected ? 'Your screen is being mirrored' : 'Setting up…',
-            style: const TextStyle(fontSize: 13, color: _muted),
+            // Green once it is true. This is the line that answers "is my
+            // screen out there right now?", and in muted grey it read as a
+            // caption for the number above it.
+            style: TextStyle(fontSize: 13, color: connected ? _live : _muted),
+          ),
+          // The same four readings the desktop puts along its bottom edge.
+          // Only on the WebRTC path: the USB one has no peer connection to ask,
+          // and a grid of dashes says less than no grid at all.
+          if (!usb && stats != null) ...[
+            const SizedBox(height: 18),
+            _StatGrid(stats: stats!),
+          ],
+        ],
+      );
+}
+
+/// Two by two, because four readings in a row on a phone are four columns too
+/// narrow to hold "2304×1440".
+class _StatGrid extends StatelessWidget {
+  const _StatGrid({required this.stats});
+
+  final CastStats stats;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        children: [
+          Row(
+            children: [
+              Expanded(child: _Stat(k: 'PATH', v: stats.path)),
+              // The link estimate, because it is the number every other number
+              // on this card is downstream of: a small picture on a narrow link
+              // is the mirror working correctly, and this is what says so.
+              Expanded(child: _Stat(k: 'LINK', v: stats.linkLabel)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _Stat(k: 'LATENCY', v: stats.rttLabel)),
+              Expanded(child: _Stat(k: 'PICTURE', v: stats.pictureLabel)),
+            ],
+          ),
+        ],
+      );
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat({required this.k, required this.v});
+
+  final String k;
+  final String v;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(height: 1, color: _edge),
+          const SizedBox(height: 7),
+          Text(
+            k,
+            style: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.6,
+              color: _muted,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            v,
+            // Tabular, so a value that changes every second does not shuffle
+            // the one beside it sideways as digits swap width.
+            style: const TextStyle(
+              fontSize: 14,
+              color: _ink,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
           ),
         ],
       );

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """aircast signalling server.
 
-Pairs two peers on a 6-digit code, buffers the sender's offer until the
-receiver arrives, relays ICE candidates both ways, and mints short-lived TURN
-REST credentials. Protocol: docs/protocol/signalling.md.
+Pairs two peers on a 6-digit code, tells each side when the other arrives,
+relays the offer, the answer and ICE candidates both ways, and mints
+short-lived TURN REST credentials. Protocol: docs/protocol/signalling.md.
 
 Configuration comes from the environment (systemd EnvironmentFile), so the
 shared secret never appears in the unit file or in `ps`:
@@ -12,7 +12,8 @@ shared secret never appears in the unit file or in `ps`:
     AIRCAST_TURN_URLS     comma-separated turn: URLs             (required)
     AIRCAST_BIND          default 127.0.0.1                      (behind nginx/caddy)
     AIRCAST_PORT          default 8443
-    AIRCAST_TTL           pairing + credential lifetime, seconds (default 300)
+    AIRCAST_TTL           pairing-code lifetime, seconds                (default 300)
+    AIRCAST_TURN_TTL      TURN credential lifetime, seconds             (default 43200)
     AIRCAST_MAX_MISSES    failed joins per IP per minute before refusal (default 10)
 """
 
@@ -69,11 +70,33 @@ def client_ip(ws: ServerConnection) -> str:
     overwrites the header for the same reason; this is the half that survives a
     proxy someone else configures."""
     peer = ws.remote_address[0] if ws.remote_address else "?"
-    if peer in ("127.0.0.1", "::1"):
-        forwarded = ws.request.headers.get("X-Forwarded-For") if ws.request else None
+    if peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        # get_all, not get: a field that arrives on two lines means exactly what
+        # the same field comma-joined on one line means (RFC 9110), but get() is
+        # Mapping.get and only swallows KeyError, while websockets raises
+        # MultipleValuesError -- a LookupError that is not a KeyError. A second
+        # proxy that adds its own line rather than appending to ours therefore
+        # took the connection down with an unhandled exception and a 1011
+        # instead of being read. The last element of the last line is the same
+        # rule as before: the nearest proxy's word for who this is.
+        forwarded = ws.request.headers.get_all("X-Forwarded-For") if ws.request else []
         if forwarded:
-            return forwarded.split(",")[-1].strip()
+            return forwarded[-1].split(",")[-1].strip()
     return peer
+
+
+async def _still_there(ws: ServerConnection) -> bool:
+    """Is anyone actually on the other end of this socket?
+
+    A peer that walked out of range sends no close frame and no FIN, so the
+    socket stays open on this side and the only way to find out is to ask and
+    wait a moment for the answer.
+    """
+    try:
+        await asyncio.wait_for(await ws.ping(), timeout=2)
+    except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError):
+        return False
+    return True
 
 
 @dataclass
@@ -82,15 +105,36 @@ class Pairing:
 
     created: float = field(default_factory=time.monotonic)
     peers: dict[str, ServerConnection] = field(default_factory=dict)
-    # The answerer cannot answer before it has the offer, so hold it.
-    offer: dict | None = None
+    # True from the moment both roles have been present at once, and never
+    # false again. The TTL below is for a code nobody claimed, and a cast in
+    # progress is not that: a receiver whose signalling socket blips leaves this
+    # pairing one peer short for about a second, and expiring it there closed
+    # the sender's socket with "pairing expired" -- to a phone that was
+    # mirroring, on every cast that had run longer than the 300 s window, which
+    # is every cast anyone sits through. The rejoin then found nobody left to be
+    # offered to, which is the whole of what the rejoin is for.
+    paired: bool = False
+    # When the receiver now in the slot joined; its TURN credential is that old.
+    receiver_since: float = 0.0
 
 
 class Server:
-    def __init__(self, secret: str, urls: list[str], ttl: int, max_misses: int = 10) -> None:
+    def __init__(
+        self, secret: str, urls: list[str], ttl: int, max_misses: int = 10, turn_ttl: int = 43200
+    ) -> None:
         self.secret = secret
         self.urls = urls
         self.ttl = ttl
+        # Not the pairing TTL. The timestamp in a REST username is checked by
+        # coturn on every authenticated request, not only the first: the
+        # allocation refresh and the permission refresh both carry it, and the
+        # peers keep sending those for as long as the screen is mirrored. With
+        # the two lifetimes shared, a credential minted at join expired five
+        # minutes later, the next refresh got 401, coturn dropped the
+        # allocation, and the picture froze mid-session. This has to outlive the
+        # longest session anyone will sit through, and no more than that: it is
+        # also how long a leaked credential can burn relay bandwidth.
+        self.turn_ttl = turn_ttl
         # A 6-digit code is a guessable space, so the throttle is the defence
         # (issue #6): a client that keeps naming codes nobody is waiting on
         # stops being answered.
@@ -101,7 +145,14 @@ class Server:
     def _throttled(self, ip: str) -> bool:
         now = time.monotonic()
         recent = [t for t in self.misses.get(ip, []) if now - t < 60]
-        self.misses[ip] = recent
+        if recent:
+            self.misses[ip] = recent
+        else:
+            # An address with nothing recent is an address with no history, and
+            # keeping the empty list is what turned this into a dict that only
+            # ever grows: one entry per address that ever guessed wrong, for the
+            # life of the process, on a server that is meant to run for months.
+            self.misses.pop(ip, None)
         return len(recent) >= self.max_misses
 
     def _miss(self, ip: str) -> None:
@@ -135,7 +186,7 @@ class Server:
             pass
         finally:
             if code is not None and role is not None:
-                self._leave(code, role)
+                self._leave(code, role, ws)
 
     async def _join(self, ws: ServerConnection, msg: dict) -> tuple[str | None, str | None]:
         code = msg.get("code")
@@ -151,38 +202,97 @@ class Server:
             return None, None
 
         self._expire()
-        # Joining a code nobody is waiting on is what guessing looks like, and
-        # the receiver is the one that invents the code and puts it on screen —
-        # so the receiver is always first, and charging it meant every ordinary
-        # start of the program spent one of its own ten attempts while a sender
-        # could guess forever for free.
-        if role == "sender" and code not in self.pairings:
-            self._miss(ip)
+        # Every join costs, not only the blind one. Charging the side that has
+        # to guess left the door open on the side that does not: a receiver's
+        # join was never a miss by the old rule, so the whole six-digit space
+        # could be walked at no cost -- "that role is already taken" for a code
+        # somebody is really waiting on, "joined" for the rest, which is exactly
+        # the oracle the throttle exists to deny. A join is also what mints a
+        # TURN credential, so a client that guessed nothing at all could sit
+        # there collecting twelve-hour relay credentials until coturn had no
+        # quota left for a real cast. The cost to an honest receiver is one
+        # attempt per start of the program, out of ten a minute.
+        self._miss(ip)
         pairing = self.pairings.setdefault(code, Pairing())
-        if role in pairing.peers:
+        incumbent = pairing.peers.get(role)
+        if incumbent is not None and not await _still_there(incumbent):
+            # The peer holding this role is gone and has not noticed. A device
+            # that walks out of Wi-Fi sends no close frame and no FIN, so its
+            # socket stays open on this side until a write finally fails, and
+            # the same device coming back on another network was refused by its
+            # own corpse -- with the only code it has, the one on its screen.
+            # Asking costs one ping and two seconds, and only when the role
+            # looks taken.
+            log.info("code %s: replacing a %s that stopped answering", code, role)
+            # Re-read the table: _still_there parks for two seconds and the
+            # corpse's own handler can finish inside that window. _leave then
+            # removes the role and drops the whole pairing when it empties, so
+            # the blind del was a KeyError and handle() answered 1011 in place
+            # of "joined". Trusting the Pairing read two seconds ago is the
+            # other half of it -- the peers dict may no longer be the one filed
+            # under this code, and a receiver installed in the orphan is a
+            # receiver no sender can ever be paired with, on a socket with
+            # nothing wrong with it, so it never reconnects.
+            pairing = self.pairings.setdefault(code, Pairing())
+            if pairing.peers.get(role) is incumbent:
+                del pairing.peers[role]
+            incumbent = pairing.peers.get(role)
+        if incumbent is not None:
             # Two senders on one code: a typo, or someone shadowing a live
             # pairing. Either way the first peer keeps the slot.
             await self._error(ws, "that role is already taken")
             return None, None
         pairing.peers[role] = ws
+        if role == "receiver":
+            pairing.receiver_since = time.monotonic()
 
-        await ws.send(json.dumps({
-            "type": "joined",
-            "turn": turn_credentials(self.secret, self.urls, self.ttl),
-        }))
+        try:
+            await ws.send(json.dumps({
+                "type": "joined",
+                "turn": turn_credentials(self.secret, self.urls, self.turn_ttl),
+            }))
+        except websockets.ConnectionClosed:
+            # The slot is taken but handle() has no code yet, so its finally
+            # never reaches _leave: the dead socket sat in the role for ever,
+            # kept the pairing alive once the other side left, and the next
+            # phone to type this code was told "peer" and offered to a corpse.
+            # Measured with a joiner that gave up inside _still_there's park.
+            self._leave(code, role, ws)
+            raise
 
         other = ROLES[0] if role == ROLES[1] else ROLES[1]
         peer = pairing.peers.get(other)
+        if (peer is not None and role == "sender"
+                and time.monotonic() - pairing.receiver_since > self.turn_ttl / 2):
+            # The receiver keeps the TURN block from its own "joined" for the
+            # life of its socket (receiver/main.c on_message), and a receiver
+            # left running after a cast holds a paired pairing that nothing
+            # expires, so the next morning's cast was built on a credential
+            # coturn had stopped accepting hours before. A close makes it
+            # rejoin -- it has the one code -- and the rejoin is what pairs.
+            asyncio.create_task(peer.close(code=1000, reason="pairing expired"))
+            peer = None
         if peer is not None:
-            # Tell both sides, and flush the buffered offer to a receiver that
-            # joined after the sender.
+            pairing.paired = True
+            # Tell both sides. This frame is the sender's cue to offer, every
+            # time and not only the first, which is why nothing here keeps the
+            # last offer to hand to a receiver that joined late.
+            #
+            # Holding one was worse than useless. The sender never offers until
+            # it has been told a peer is there, so an offer older than the
+            # receiver cannot exist; what the buffer actually held was the offer
+            # of a cast already in progress, and the only receiver it was ever
+            # replayed to was one that had just rebuilt its pipeline and could
+            # answer it with nothing but a certificate and credentials the phone
+            # had not asked to change. The phone refused that answer, the
+            # desktop sat on "Negotiating", and the cast was over. An offer that
+            # arrives while the receiver is briefly gone is dropped instead, and
+            # the rejoin that follows asks for a new one.
             await asyncio.gather(
                 ws.send(json.dumps({"type": "peer"})),
                 peer.send(json.dumps({"type": "peer"})),
                 return_exceptions=True,
             )
-            if role == "receiver" and pairing.offer is not None:
-                await ws.send(json.dumps(pairing.offer))
         log.info("code %s: %s joined", code, role)
         return code, role
 
@@ -190,8 +300,6 @@ class Server:
         pairing = self.pairings.get(code)
         if pairing is None:
             return
-        if msg["type"] == "offer" and role == "sender":
-            pairing.offer = msg
         other = ROLES[0] if role == ROLES[1] else ROLES[1]
         peer = pairing.peers.get(other)
         if peer is not None:
@@ -205,11 +313,23 @@ class Server:
         except websockets.ConnectionClosed:
             pass
 
-    def _leave(self, code: str, role: str) -> None:
+    def _leave(self, code: str, role: str, ws: ServerConnection) -> None:
         pairing = self.pairings.get(code)
-        if pairing is None:
+        # The pairing filed under this code is not necessarily the one this
+        # connection joined. A receiver whose network vanishes leaves a socket
+        # nobody has closed yet; it comes back a second later with the same code,
+        # because it only ever has the one it printed on screen, and the new
+        # connection takes the slot. The old handler then finishes dying when the
+        # close handshake it will never get an answer to times out, and popping
+        # the role blind evicted the live connection that had replaced it.
+        # Nothing told that receiver, because nothing was wrong with its socket,
+        # and a socket that stays open never reconnects -- so it sat there
+        # showing its code with the server no longer able to reach it, which is
+        # the failure the reconnect in receiver/main.c was written to end. Leave
+        # only if this connection is still the one holding the role.
+        if pairing is None or pairing.peers.get(role) is not ws:
             return
-        pairing.peers.pop(role, None)
+        del pairing.peers[role]
         if not pairing.peers:
             del self.pairings[code]
         log.info("code %s: %s left", code, role)
@@ -217,7 +337,14 @@ class Server:
     def _expire(self) -> None:
         now = time.monotonic()
         for code, pairing in list(self.pairings.items()):
-            if now - pairing.created > self.ttl and len(pairing.peers) < 2:
+            # Not a code a receiver holds: it has the one code, on its screen,
+            # and rejoins with it a second after any close (receiver/main.c
+            # on_ws_closed), so the kick retired nothing. What it did was land
+            # on the receiver at the instant its sender arrived, whenever the
+            # receiver had waited past the TTL, and cost every such cast a
+            # "connection closed. Reconnecting" and a second before "peer".
+            if (now - pairing.created > self.ttl and not pairing.paired
+                    and "receiver" not in pairing.peers):
                 for ws in pairing.peers.values():
                     asyncio.create_task(ws.close(code=1000, reason="pairing expired"))
                 del self.pairings[code]
@@ -248,6 +375,7 @@ async def main() -> None:
         urls,
         int(os.environ.get("AIRCAST_TTL", "300")),
         int(os.environ.get("AIRCAST_MAX_MISSES", "10")),
+        turn_ttl=int(os.environ.get("AIRCAST_TURN_TTL", "43200")),
     )
     host = os.environ.get("AIRCAST_BIND", "127.0.0.1")
     port = int(os.environ.get("AIRCAST_PORT", "8443"))

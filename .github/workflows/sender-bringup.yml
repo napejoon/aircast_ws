@@ -19,11 +19,11 @@ on:
         required: true
         type: string
       relay:
-        description: "AIRCAST_RELAY — true for a real deployment with coturn; false only for a LAN with none"
+        description: "AIRCAST_RELAY — true forces every packet through coturn; false (the shipped default) lets ICE take a direct pair when it can"
         required: true
         type: choice
         options: ["true", "false"]
-        default: "true"
+        default: "false"
 
 permissions:
   contents: read

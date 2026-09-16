@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -30,8 +31,16 @@ async def strict_endpoint():
         yield url
 
 
-async def _endpoint(max_misses):
-    server = Server(SECRET, URLS, ttl=300, max_misses=max_misses)
+@pytest.fixture
+async def brief_endpoint():
+    # A pairing TTL shorter than the test that uses it, so the rejoin there
+    # crosses it the way every real cast crosses the 300 s default.
+    async for url in _endpoint(max_misses=10, ttl=0.2):
+        yield url
+
+
+async def _endpoint(max_misses, ttl=300):
+    server = Server(SECRET, URLS, ttl=ttl, max_misses=max_misses, turn_ttl=43200)
     async with serve(server.handle, "127.0.0.1", 0) as ws_server:
         port = ws_server.sockets[0].getsockname()[1]
         yield f"ws://127.0.0.1:{port}"
@@ -57,23 +66,53 @@ def test_turn_credentials_match_coturns_construction():
 
 
 @pytest.mark.asyncio
-async def test_offer_is_buffered_for_a_receiver_that_joins_late(endpoint):
-    sender = await join(endpoint, "123456", "sender")
-    assert (await recv(sender))["type"] == "joined"
-    await sender.send(json.dumps({"type": "offer", "sdp": "v=0 offer"}))
+async def test_the_turn_credential_outlives_the_pairing_window(endpoint):
+    # coturn checks the timestamp on every refresh, not only on the first
+    # allocation. A credential that died with the 300 s pairing window took the
+    # relay allocation down with it five minutes into a working mirror.
+    ws = await join(endpoint, "654321", "receiver")
+    joined = await recv(ws)
+    expiry, _, _ = joined["turn"]["username"].partition(":")
+    assert int(expiry) > time.time() + 3600
+    await ws.close()
 
-    receiver = await join(endpoint, "123456", "receiver")
+
+@pytest.mark.asyncio
+async def test_a_receiver_that_rejoins_is_offered_to_again(brief_endpoint):
+    # The offer this pairing is casting on was answered by a receiver that has
+    # since walked out. Replaying it at the one that comes back only got it
+    # answered a second time, by a webrtcbin the phone had never negotiated
+    # with; what the rejoining receiver needs is a new offer, and the sender
+    # makes one every time it is told a peer has joined.
+    #
+    # This endpoint's pairing TTL is shorter than the sleep below on purpose.
+    # Expiring a live pairing that is merely one peer short closed the sender's
+    # socket with "pairing expired" the moment the receiver blinked, and every
+    # cast worth having is older than that window by the time it blinks.
+    sender = await join(brief_endpoint, "123456", "sender")
+    assert (await recv(sender))["type"] == "joined"
+    receiver = await join(brief_endpoint, "123456", "receiver")
     assert (await recv(receiver))["type"] == "joined"
     assert (await recv(receiver))["type"] == "peer"
-    offer = await recv(receiver)
-    assert offer == {"type": "offer", "sdp": "v=0 offer"}
-
-    await receiver.send(json.dumps({"type": "answer", "sdp": "v=0 answer"}))
     assert (await recv(sender))["type"] == "peer"
+    await sender.send(json.dumps({"type": "offer", "sdp": "v=0 first"}))
+    assert (await recv(receiver))["sdp"] == "v=0 first"
+    await receiver.send(json.dumps({"type": "answer", "sdp": "v=0 answer"}))
     assert (await recv(sender))["sdp"] == "v=0 answer"
 
-    await sender.close()
     await receiver.close()
+    # Past the TTL, and long enough for the server to have booked the leave.
+    await asyncio.sleep(0.3)
+    again = await join(brief_endpoint, "123456", "receiver")
+    assert (await recv(again))["type"] == "joined"
+    assert (await recv(again))["type"] == "peer"
+    assert (await recv(sender))["type"] == "peer"
+
+    await sender.send(json.dumps({"type": "offer", "sdp": "v=0 second"}))
+    assert (await recv(again))["sdp"] == "v=0 second"
+
+    await sender.close()
+    await again.close()
 
 
 @pytest.mark.asyncio
@@ -131,14 +170,21 @@ async def test_a_sender_guessing_codes_is_cut_off(strict_endpoint):
 
 
 @pytest.mark.asyncio
-async def test_a_receiver_arriving_first_is_not_charged_a_miss(strict_endpoint):
-    # The receiver invents the code and displays it, so it is always first and
-    # its code is never already waiting. Charging it spent the program's own
-    # budget on starting up.
-    for code in ("111111", "222222", "333333"):
+async def test_a_receiver_walking_codes_is_cut_off_too(strict_endpoint):
+    # Every join costs, whichever role asks. Charging only the side that has to
+    # guess left the other one free: joining as a receiver answers "that role is
+    # already taken" for a code somebody is waiting on and "joined" for the rest,
+    # which is the oracle the throttle exists to deny, and each of those joins
+    # mints a TURN credential besides. An honest receiver spends one attempt per
+    # start of the program, out of ten a minute.
+    for code in ("111111", "222222"):
         ws = await join(strict_endpoint, code, "receiver")
         assert (await recv(ws))["type"] == "joined"
         await ws.close()
+
+    ws = await join(strict_endpoint, "333333", "receiver")
+    assert (await recv(ws))["type"] == "error"
+    await ws.close()
 
 
 @pytest.mark.asyncio
@@ -173,3 +219,73 @@ async def test_a_client_cannot_mint_itself_a_fresh_bucket(strict_endpoint):
                          forwarded_for="10.0.0.99, 203.0.113.9")
     assert (await recv(blocked))["type"] == "error"
     await blocked.close()
+
+
+async def _server(**kw):
+    server = Server(SECRET, URLS, ttl=kw.pop("ttl", 300), max_misses=100, turn_ttl=kw.pop("turn_ttl", 43200))
+    ws_server = await serve(server.handle, "127.0.0.1", 0, **kw)
+    return server, ws_server, f"ws://127.0.0.1:{ws_server.sockets[0].getsockname()[1]}"
+
+
+@pytest.mark.asyncio
+async def test_a_joiner_that_dies_before_joined_does_not_keep_the_slot():
+    # The receiver in the slot has walked out of range, so the rejoin parks two
+    # seconds pinging it. A rejoin that gives up inside that window used to be
+    # installed in the slot anyway, dead, with nothing to ever take it out --
+    # and the pairing it kept alive offered the next phone to a corpse.
+    server, ws_server, url = await _server(ping_interval=None)
+    async with ws_server:
+        sender = await join(url, "111111", "sender")
+        receiver = await join(url, "111111", "receiver")
+        for ws in (sender, receiver):
+            assert (await recv(ws))["type"] == "joined"
+            assert (await recv(ws))["type"] == "peer"
+        receiver.transport.pause_reading()      # no pong, no FIN
+        again = await join(url, "111111", "receiver")
+        await asyncio.sleep(0.5)
+        await again.close()                     # gives up inside the park
+        await asyncio.sleep(3)
+        assert "receiver" not in server.pairings["111111"].peers
+        await sender.close()
+        await asyncio.sleep(0.3)
+        assert "111111" not in server.pairings
+        receiver.transport.abort()
+
+
+@pytest.mark.asyncio
+async def test_a_receiver_holding_an_old_credential_is_made_to_rejoin():
+    # The receiver keeps the TURN block from its own "joined" for the life of
+    # its socket, and a receiver left running after a cast is never expired.
+    server, ws_server, url = await _server(turn_ttl=1)
+    async with ws_server:
+        receiver = await join(url, "555555", "receiver")
+        assert (await recv(receiver))["type"] == "joined"
+        await asyncio.sleep(0.7)                # past half the credential's life
+        sender = await join(url, "555555", "sender")
+        assert (await recv(sender))["type"] == "joined"
+        with pytest.raises(websockets.ConnectionClosed) as e:
+            await recv(receiver)
+        assert e.value.rcvd.code == 1000
+        again = await join(url, "555555", "receiver")
+        assert (await recv(again))["type"] == "joined"
+        assert (await recv(again))["type"] == "peer"
+        assert (await recv(sender))["type"] == "peer"
+        await sender.close()
+        await again.close()
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_receiver_is_not_kicked_when_its_sender_arrives(brief_endpoint):
+    # The receiver has the one code, on its screen, and rejoins with it after
+    # any close, so expiring its code retired nothing -- it landed on the
+    # receiver at the instant its sender arrived, every time the receiver had
+    # waited longer than the TTL.
+    receiver = await join(brief_endpoint, "444444", "receiver")
+    assert (await recv(receiver))["type"] == "joined"
+    await asyncio.sleep(0.3)
+    sender = await join(brief_endpoint, "444444", "sender")
+    assert (await recv(sender))["type"] == "joined"
+    assert (await recv(receiver))["type"] == "peer"
+    assert (await recv(sender))["type"] == "peer"
+    await sender.close()
+    await receiver.close()

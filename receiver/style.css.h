@@ -41,6 +41,11 @@
 "  font-feature-settings: 'tnum' 1;"
 "  color: #f2f5f9;"
 "  margin: 14px 0 8px 0;"
+/* Letter-spacing is applied after every character including the last, so the
+ * label is 14 px wider on the right than the digits are, and a centred label
+ * sits 7 px left of where it looks like it should. The padding puts the gap
+ * back on the other side. */
+"  padding-left: 14px;"
 "}"
 
 ".status {"
@@ -62,22 +67,96 @@
 "  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);"
 "}"
 
+/* No minimum size. It was 320x240, and with the aspect frame in front of it
+ * that made GTK's own layout invariant fail: the frame derives its ratio from
+ * this child, and 240 px plus the bezel's 94 px of chrome came back as a
+ * natural height of 334 against a minimum of 335 -- one pixel of ratio
+ * rounding, and "natural size must be >= min size" on every measure with no
+ * paintable attached. The frame is what stops the video collapsing now, which
+ * is the whole job the minimum was doing. */
 ".screen {"
 "  border-radius: 22px;"
-"  min-width: 320px;"
-"  min-height: 240px;"
 "  background: #000000;"
+"}"
+
+/* ------------------------------------------------------- connection strip */
+
+/* Along the bottom on both pages. Reads as part of the window's frame rather
+ * than as a card floating in it, so it has one hairline above it and no
+ * radius, no shadow and no fill of its own beyond a shade off the room. */
+".strip {"
+"  background: #101317;"
+"  border-top: 1px solid #232830;"
+"}"
+
+".cell {"
+"  padding: 8px 16px;"
+"  border-right: 1px solid #232830;"
+"}"
+
+/* The readings sit in their own box (build_strip), so this is the last of them
+ * and not the last thing in the strip. A rule with nothing to its right reads
+ * as a row that was cut off rather than one that ended. */
+".cell:last-child {"
+"  border-right: none;"
+"}"
+
+".cell-key {"
+"  font-size: 9px;"
+"  font-weight: 700;"
+"  letter-spacing: 2px;"
+"  color: #4E5661;"
+"}"
+
+/* Monospaced and tabular: these numbers change every second, and in a
+ * proportional face the whole row twitches sideways as digits swap width. */
+".cell-value {"
+"  font-family: monospace;"
+"  font-size: 12px;"
+"  font-feature-settings: 'tnum' 1;"
+"  color: #f2f5f9;"
+"}"
+
+".cell-state {"
+"  font-size: 12px;"
+"  color: #c9d1dc;"
+"}"
+
+/* A disc drawn by the box rather than by a glyph, so it does not depend on
+ * whatever font happens to carry a filled circle. Grey until there is a
+ * session to be green about. */
+".beacon {"
+"  min-width: 8px;"
+"  min-height: 8px;"
+"  border-radius: 999px;"
+"  background: #4E5661;"
+"}"
+
+/* The halo, not a bigger disc: the strip is 8 px of colour against #101317 and
+ * the eye skips it. A ring at a sixth of the same colour is visible from the
+ * far side of a desk and takes no room the row has to give up, because a
+ * box-shadow is drawn outside the layout. */
+".beacon.live {"
+"  background: #3ddc91;"
+"  box-shadow: 0 0 0 3px rgba(61, 220, 145, 0.16);"
+"}"
+
+".beacon.bad {"
+"  background: #ff6b5e;"
+"  box-shadow: 0 0 0 3px rgba(255, 107, 94, 0.16);"
 "}"
 
 /* ---------------------------------------------------------------- toolbar */
 
-/* Floats over the video, appears on movement, fades out again. */
+/* A row under the picture, not a pill floating over it. It used to appear on
+ * mouse movement and fade out again, which hid the button that ends the cast
+ * at the moment someone reaches for it: they have been watching a phone
+ * screen, not moving a mouse. No radius and no shadow, because it is part of
+ * the window's frame now rather than an object sitting on the video. */
 ".toolbar {"
-"  padding: 8px;"
-"  border-radius: 999px;"
-"  background: rgba(20, 23, 28, 0.92);"
-"  border: 1px solid #2b3038;"
-"  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);"
+"  padding: 6px 10px;"
+"  background: #101317;"
+"  border-top: 1px solid #232830;"
 "}"
 
 "button.tool {"
@@ -93,6 +172,16 @@
 "button.tool:hover {"
 "  background: #242a33;"
 "  color: #ffffff;"
+"}"
+
+/* F, R and D drive these from the keyboard, so Tab reaching one has to show.
+ * The same fill as hover plus an outline, because the fill alone is the state
+ * the pointer already uses and would not say which button holds focus. */
+"button.tool:focus-visible {"
+"  background: #242a33;"
+"  color: #ffffff;"
+"  outline: 2px solid #4E5661;"
+"  outline-offset: -2px;"
 "}"
 
 /* Recording is loud on purpose — a session recorded by accident is the one"
@@ -111,4 +200,37 @@
 "  font-size: 13px;"
 "  font-feature-settings: 'tnum' 1;"
 "  color: #ff6b5e;"
+"}"
+
+/* The chevron that folds the readings away. Quieter than a toolbar button:
+ * it is a preference, not an action on the cast. */
+"button.strip-toggle {"
+"  min-width: 26px;"
+"  min-height: 26px;"
+"  margin: 0 6px;"
+"  color: #4E5661;"
+"}"
+
+"button.strip-toggle:hover {"
+"  background: #1B1F26;"
+"  color: #c9d1dc;"
+"}"
+
+/* Fullscreen is the mirror and nothing else: the frame that makes this read as
+ * an object in a room is exactly what wastes a screen when the screen is all
+ * there is. */
+"window.immersive .bezel {"
+"  margin: 0;"
+"  padding: 0;"
+"  border-radius: 0;"
+"  border-width: 0;"
+"  box-shadow: none;"
+"}"
+
+"window.immersive .screen {"
+"  border-radius: 0;"
+"}"
+
+"window.immersive .toolbar {"
+"  border-top-width: 0;"
 "}"

@@ -9,9 +9,18 @@
          after pairing. flutter_webrtc declares nothing in its own manifest, so
          the permission has to be here. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Declared here and requested in UsbCastPlugin ("askToNotify"), called
+         from main.dart when the app opens. Declaring it alone bought nothing:
+         since Android 13 a notification from an app that has not been granted
+         this is dropped at enqueue, which is how the cast notification came to
+         be posted sixteen times and displayed none. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- The cast service holds a screen wake lock: Android stops a projection
+         when the screen locks, and the app's own window is not in front while
+         the user mirrors some other app. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Fully qualified on purpose: the Gradle namespace `flutter create`
          generates is derived from the project name, so a relative ".MainActivity"

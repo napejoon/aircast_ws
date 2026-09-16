@@ -17,7 +17,7 @@ goes first.
 |---|---|
 | client → server | `{"type":"join","code":"123456","role":"sender"\|"receiver"}` |
 | server → client | `{"type":"joined","turn":{"urls":[...],"username":"...","credential":"..."}}` |
-| server → client | `{"type":"peer"}` — the other side has joined this code |
+| server → client | `{"type":"peer"}` — the other side has joined this code, and the sender offers on every one |
 | sender → server → receiver | `{"type":"offer","sdp":"..."}` |
 | receiver → server → sender | `{"type":"answer","sdp":"..."}` |
 | both ways | `{"type":"candidate","candidate":{"candidate":"...","sdpMid":"...","sdpMLineIndex":0}}` |
@@ -27,22 +27,43 @@ goes first.
 ## Server obligations
 
 1. Pair the two peers on the 6-digit code.
-2. **Buffer the offer** until the receiver joins. A peer that joins second must
-   still get the offer that was sent before it arrived; forward-and-forget is a
-   bug.
+2. **Tell both sides** as soon as the second one joins, and every time after
+   that. A receiver that rejoins after a signalling drop is a peer joining, and
+   the sender answers each `peer` with a fresh offer — with an ICE restart,
+   because the receiver that comes back has a new DTLS certificate and RFC 8829
+   §5.10 will not take a changed fingerprint without new ICE credentials. The
+   server holds no offer of its own: the sender never offers before it has been
+   told a peer is there, so an offer older than the receiver cannot exist, and
+   replaying the offer of a cast already in progress only got it answered by a
+   peer the phone could not accept an answer from.
 3. Relay candidates as opaque blobs in both directions, immediately (trickle).
 4. Mint TURN REST credentials per pairing and send them in `joined`:
    `username = "<expiry-unix>:<opaque-id>"`,
    `credential = base64(HMAC-SHA1(username, static-auth-secret))`, with the
-   shared secret read from `/etc/aircast/signal.env`. Expiry ≈ the pairing
-   window; it is unrelated to coturn's `stale-nonce`.
-5. Expire the code and drop the buffered offer on connect or on a short TTL.
+   shared secret read from `/etc/aircast/signal.env`. Expiry must outlive the
+   longest *session*, not the pairing window (`AIRCAST_TURN_TTL`, default 12 h):
+   coturn re-checks the timestamp on every allocation and permission refresh,
+   so a credential tied to the 300 s pairing window killed the relay
+   allocation five minutes into a working mirror. It is unrelated to coturn's
+   `stale-nonce`.
+5. Expire a code on a short TTL (`AIRCAST_TTL`, default 300 s) only while it is
+   still unpaired AND no receiver holds it. A receiver has the one code, on its
+   screen, and rejoins with it a second after any close, so expiring it retired
+   nothing and landed on the receiver at the instant its sender arrived. Once
+   both sides have been on a code at the same time the pairing belongs to them
+   until both sockets are gone. What does get closed is a receiver whose TURN
+   credential is older than half `AIRCAST_TURN_TTL` at the moment a sender
+   joins: it rejoins at once, and the rejoin is what mints it a fresh one --
+   a receiver kept on the credential of its first join fails every later cast
+   at the relay.
 
 ## Client obligations
 
-- ICE is `relay`-only. The sender sets `iceTransportPolicy: 'relay'`, so the
-  TURN entry from `joined` is the whole ICE configuration and a swap to a
-  managed TURN is a server-side change only.
+- ICE gathers host and relay candidates and lets a host pair win when both
+  work; the TURN entry from `joined` is what carries a cast on a network that
+  blocks the direct path. Relay-only is an opt-in on both ends
+  (`--relay-only` on the receiver, `--dart-define=AIRCAST_RELAY=true` on the
+  sender) and a mismatch is safe but pointless.
 - Codec preference is H.264 then VP8. VP8 is not optional: libwebrtc's Android
   AAR ships no software H.264, so a MediaTek or Unisoc phone has no H.264
   encoder at all.
@@ -50,15 +71,19 @@ goes first.
 ## Abuse
 
 A 6-digit code is a guessable space, so the code is not a secret — the server
-is the defence. It charges a *miss* to a **sender** that joins a code no
-receiver is waiting on, and refuses a client past `AIRCAST_MAX_MISSES`
-(default 10) misses per minute.
+is the defence. It charges a *miss* to **every join**, either role, and refuses
+a client past `AIRCAST_MAX_MISSES` (default 10) misses per minute.
 
-The role matters and was once written the other way round. The receiver invents
-the code and displays it, so the receiver is always first and its code is never
-"already waiting" — charging it meant every ordinary start of the program spent
-one of its own ten attempts, while the sender, the only side that can type a
-code it does not know, was never charged at all.
+Every join, not only a sender's. The rule was once "a sender that joins a code
+no receiver is waiting on", which left the door open on the side that does not
+type codes: a receiver's join was never a miss, so a client joining as a
+receiver could walk the whole six-digit space for free and be told "that role
+is already taken" for every code somebody was really waiting on and `joined`
+for the rest — exactly
+the oracle the throttle exists to deny. A join is also what mints a TURN
+credential, so an uncharged role was an unmetered credential mint. The cost to
+an honest receiver is one of its ten attempts per minute at start-up, which it
+never notices.
 
 Behind a reverse proxy every connection arrives from loopback, so the server
 trusts `X-Forwarded-For` **only** when the peer address is loopback, and reads
