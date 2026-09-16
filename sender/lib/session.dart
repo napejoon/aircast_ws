@@ -121,6 +121,14 @@ class CastSession {
   static const _dropFpsBelowBps = 4000000;
   static const _raiseFpsAboveBps = 6000000;
 
+  /// The encoder's bitrate floor, before and after the link has been judged.
+  /// Three megabits gets a full-resolution keyframe onto a fast link at once;
+  /// six hundred kilobits is what a 2.33 Mbit/s link can spare without the
+  /// floor crowding out congestion control's own probing.
+  static const _floorFastBps = 3000000;
+  static const _floorNarrowBps = 600000;
+  int _floor = _floorFastBps;
+
   /// Consecutive readings under the drop threshold, counted only once the
   /// opening ramp is over.
   ///
@@ -139,15 +147,21 @@ class CastSession {
   static const _rampSeconds = 10;
   DateTime? _connectedAt;
 
-  Future<void> _adaptFrameRate(RTCPeerConnection pc, int? bwe) async {
+  Future<void> _adaptEncoding(RTCPeerConnection pc, int? bwe) async {
     if (bwe == null) return;
     _connectedAt ??= DateTime.now();
     if (DateTime.now().difference(_connectedAt!).inSeconds < _rampSeconds) return;
     _lowTicks = bwe < _dropFpsBelowBps ? _lowTicks + 1 : 0;
-    final want = _lowTicks >= 3
-        ? 30
-        : (bwe > _raiseFpsAboveBps ? 60 : _fpsCap);
-    if (want == _fpsCap) return;
+
+    // Two decisions off one signal, written in one setParameters. The cap and
+    // the floor answer the same question -- is this link actually small -- and
+    // splitting them into two calls would reconfigure the encoder twice.
+    final wantFps =
+        _lowTicks >= 3 ? 30 : (bwe > _raiseFpsAboveBps ? 60 : _fpsCap);
+    final wantFloor = _lowTicks >= 3
+        ? _floorNarrowBps
+        : (bwe > _raiseFpsAboveBps ? _floorFastBps : _floor);
+    if (wantFps == _fpsCap && wantFloor == _floor) return;
 
     for (final sender in await pc.getSenders()) {
       if (sender.track?.kind != 'video') continue;
@@ -155,12 +169,16 @@ class CastSession {
       final encodings = params.encodings;
       if (encodings == null || encodings.isEmpty) continue;
       for (final e in encodings) {
-        e.maxFramerate = want;
+        e.maxFramerate = wantFps;
+        e.minBitrate = wantFloor;
       }
       await sender.setParameters(params);
     }
-    debugPrint('aircast: frame cap $_fpsCap -> $want fps (estimate ${bwe ~/ 1000} kbit/s)');
-    _fpsCap = want;
+    debugPrint('aircast: cap $_fpsCap -> $wantFps fps, floor '
+        '${_floor ~/ 1000} -> ${wantFloor ~/ 1000} kbit/s '
+        '(estimate ${bwe ~/ 1000} kbit/s)');
+    _fpsCap = wantFps;
+    _floor = wantFloor;
   }
 
   /// Reads the peer connection's own report and reduces it to the four numbers
@@ -296,7 +314,7 @@ class CastSession {
         final s = await _readStats(live);
         if (s == null || _pc != live) return;
         onStats?.call(s);
-        await _adaptFrameRate(live, s.bwe);
+        await _adaptEncoding(live, s.bwe);
       } on Object catch (e) {
         // getStats throws on a connection closed between the tick and the
         // call. Nothing here is worth ending a cast over, and the UI simply
@@ -412,18 +430,24 @@ class CastSession {
       if (encodings == null || encodings.isEmpty) continue;
       for (final e in encodings) {
         e.maxBitrate = maxBitrateBps;
-        // A floor, so the first seconds are not soft: libwebrtc's congestion
-        // control starts conservative and ramps, and for a screen that reads as
-        // a blurry open that slowly sharpens.
+        // The floor opens HIGH and comes down only if the link proves narrow.
         //
-        // 600 k rather than the 2 M it was. The old figure was picked against a
-        // fast link, where it is free; on the university Wi-Fi the whole path
-        // estimates at 2.33 Mbit/s (control_handler.cc, "Bitrate estimate state
-        // changed, BWE: 2334880 bps"), so a floor of 2 M claims 86 per cent of
-        // everything there is and leaves congestion control nothing to probe
-        // with. A floor is meant to stop the opening frame being mush, which
-        // 600 k does; it is not meant to be most of the link.
-        e.minBitrate = 600000;
+        // This is what stops the stutter in the first seconds. libwebrtc opens
+        // at its 300 kbit/s start bitrate and probes upward, and under
+        // MAINTAIN_RESOLUTION a squeeze can no longer be paid for in pixels --
+        // so the whole of it lands on frame rate, which is exactly the stutter
+        // the opening seconds had. A floor is what puts bits on the wire before
+        // congestion control has finished asking: at 3 Mbit/s the first
+        // full-resolution keyframe goes out in a few hundred milliseconds
+        // instead of several seconds of dropped frames.
+        //
+        // It was 2 M once, then 600 k, and neither is right on its own: a fixed
+        // 2 M claims 86 per cent of a 2.33 Mbit/s university link and leaves
+        // congestion control nothing to probe with, while a fixed 600 k starves
+        // the opening on a link with 12 Mbit/s going spare. _adaptEncoding drops
+        // it to _floorNarrowBps once three consecutive estimates say the link
+        // really is small, which is the same signal the frame-rate cap uses.
+        e.minBitrate = _floorFastBps;
         // The tablet composites on a 16.67 ms grid and this cap was throwing
         // away every other tick. Of the 39,332 inter-frame RTP timestamp gaps
         // in one 28-minute receiver log, 17.6% are one tick, 47% two and 17.7%
@@ -479,7 +503,7 @@ class CastSession {
       // readable, and the same document at 768x480 and 60 is not.
       //
       // What it costs is frame rate under load, which is the trade we want and
-      // the one _adaptFrameRate already makes deliberately when the link is
+      // the one _adaptEncoding already makes deliberately when the link is
       // genuinely narrow.
       //
       // Never MAINTAIN_FRAMERATE_AND_RESOLUTION: webrtc_interface defines it
