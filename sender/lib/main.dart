@@ -134,7 +134,13 @@ class _SenderPageState extends State<SenderPage> {
             _status = 'Mirroring to $code';
           });
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-          _stop(status: 'The connection failed — is the relay reachable?');
+          // Names the host it failed on. The line used to ask the user "is the
+          // relay reachable?", which is a question only the app is in a
+          // position to answer, and it named nothing they could go and check.
+          _stop(
+            status: 'Cannot reach ${url.host}. Check the server address, '
+                'or try another network',
+          );
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
           setState(() {
             _connected = false;
@@ -374,17 +380,40 @@ class _CodeCard extends StatelessWidget {
             ),
             decoration: const InputDecoration(
               counterText: '',
-              hintText: '000000',
-              hintStyle: TextStyle(
-                fontSize: 44,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 10,
-                color: Color(0xFF2B3038),
-              ),
               border: InputBorder.none,
             ),
           ),
+          const SizedBox(height: 10),
+          // The hint used to be a dimmed 000000 in the same face and size as a
+          // typed code, which reads as a value already entered rather than as
+          // an empty field. Six marks say the same thing -- this many digits,
+          // this many still to go -- without pretending to be digits.
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (_, value, __) => _Slots(filled: value.text.length),
+          ),
         ],
+      );
+}
+
+/// Six marks under the field, filled from the left as digits arrive.
+class _Slots extends StatelessWidget {
+  const _Slots({required this.filled});
+
+  final int filled;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(
+          6,
+          (i) => Container(
+            width: 20,
+            height: 2,
+            margin: const EdgeInsets.symmetric(horizontal: 3),
+            color: i < filled ? _muted : _edge,
+          ),
+        ),
       );
 }
 
@@ -407,7 +436,13 @@ class _CastingCard extends StatelessWidget {
           Icon(usb ? Icons.usb : Icons.screen_share_outlined, size: 34, color: _muted),
           const SizedBox(height: 16),
           Text(
-            usb ? 'Cable' : code,
+            // Grouped the way the desktop shows it, so the two screens read as
+            // the same number rather than as two strings that happen to match.
+            usb
+                ? 'Cable'
+                : code.length == 6
+                    ? '${code.substring(0, 3)} ${code.substring(3)}'
+                    : code,
             style: const TextStyle(
               fontSize: 40,
               fontWeight: FontWeight.w700,
@@ -419,7 +454,10 @@ class _CastingCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             connected ? 'Your screen is being mirrored' : 'Setting up…',
-            style: const TextStyle(fontSize: 13, color: _muted),
+            // Green once it is true. This is the line that answers "is my
+            // screen out there right now?", and in muted grey it read as a
+            // caption for the number above it.
+            style: TextStyle(fontSize: 13, color: connected ? _live : _muted),
           ),
           // The same four readings the desktop puts along its bottom edge.
           // Only on the WebRTC path: the USB one has no peer connection to ask,

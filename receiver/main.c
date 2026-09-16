@@ -1816,7 +1816,21 @@ build_idle_page (App *self)
   GtkWidget *hint = gtk_label_new ("On your phone, open aircast and enter this code");
   gtk_widget_add_css_class (hint, "hint");
 
-  self->code_label = gtk_label_new (self->code);
+  /* Shown 482 913 rather than 482913. Six digits with nothing to break them
+   * are counted twice by anyone reading them across a room -- once to find the
+   * middle and once to keep the place -- and the group is the one thing the
+   * eye can hold in a single look. Display only: self->code stays six
+   * characters everywhere it is compared or sent, and a selection copied out
+   * of the label carries a space the phone's field drops, because that field
+   * takes digits and nothing else.
+   *
+   * Six is not assumed. Anything of another length is shown whole, since the
+   * code can come from --code and there is no sensible middle of five. */
+  gchar *shown = strlen (self->code) == 6
+      ? g_strdup_printf ("%.3s %s", self->code, self->code + 3)
+      : g_strdup (self->code);
+  self->code_label = gtk_label_new (shown);
+  g_free (shown);
   gtk_widget_add_css_class (self->code_label, "code");
   gtk_label_set_selectable (GTK_LABEL (self->code_label), TRUE);
 
