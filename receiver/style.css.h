@@ -62,10 +62,15 @@
 "  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);"
 "}"
 
+/* No minimum size. It was 320x240, and with the aspect frame in front of it
+ * that made GTK's own layout invariant fail: the frame derives its ratio from
+ * this child, and 240 px plus the bezel's 94 px of chrome came back as a
+ * natural height of 334 against a minimum of 335 -- one pixel of ratio
+ * rounding, and "natural size must be >= min size" on every measure with no
+ * paintable attached. The frame is what stops the video collapsing now, which
+ * is the whole job the minimum was doing. */
 ".screen {"
 "  border-radius: 22px;"
-"  min-width: 320px;"
-"  min-height: 240px;"
 "  background: #000000;"
 "}"
 
