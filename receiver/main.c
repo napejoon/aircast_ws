@@ -124,6 +124,7 @@ typedef struct {
   GtkWidget *fullscreen_button; /* its icon turns over with the state */
   gboolean strip_was_shown;     /* folded state, remembered across fullscreen */
   gboolean was_maximized;       /* window state to restore when fullscreen ends */
+  gint keyframe_wanted;         /* atomic: set on the streaming thread, read on the main one */
   GtkWidget *strip_toggle;      /* the chevron that folds them */
   guint stats_timer;            /* 1 Hz while a session is up, 0 otherwise */
   guint64 last_lost, last_recv; /* so loss reads per second, not per session */
@@ -202,6 +203,8 @@ static void on_pad_added (GstElement *webrtc, GstPad *pad, App *self);
 static void send_json (App *self, JsonBuilder *builder);
 static void set_status (App *self, const gchar *text);
 static void stop_recording (App *self);
+/* One RTCP PLI; defined beside the repair loop that is its other caller. */
+static void request_keyframe (App *self);
 /* Ends a media session without ending the signalling one: defined below, next
  * to the teardown it shares with a lost socket. */
 static void drop_session (App *self);
@@ -339,14 +342,8 @@ start_recording (App *self)
    * one the branch's h264parse has no SPS/PPS to build the codec_data
    * matroskamux needs, so the file stays empty until some unrelated packet loss
    * orders a keyframe. On a clean direct pair that can be the whole recording,
-   * and the teardown still reports it saved. Built by hand rather than with
-   * gst_video_event_new_upstream_force_key_unit so this does not drag
-   * gstreamer-video-1.0 into the link line: the structure name is the whole
-   * contract, and rtpsession supplies the fields it does not find. */
-  gst_element_send_event (self->pipeline,
-      gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
-          gst_structure_new ("GstForceKeyUnit",
-              "all-headers", G_TYPE_BOOLEAN, TRUE, NULL)));
+   * and the teardown still reports it saved. */
+  request_keyframe (self);
 
   self->recording = TRUE;
   self->record_started = g_get_monotonic_time ();
@@ -411,6 +408,24 @@ unlink_record_branch (GstPad *pad, GstPadProbeInfo *info, gpointer data)
    * recording ever comes out truncated. */
   self->record_drop_timer = g_timeout_add (700, drop_record_branch, self);
   return GST_PAD_PROBE_REMOVE;
+}
+
+/* One PLI, asked for in the only way this build can ask.
+ *
+ * Built by hand rather than with gst_video_event_new_upstream_force_key_unit so
+ * this does not drag gstreamer-video-1.0 into the link line: the structure name
+ * is the whole contract, and rtpsession supplies the fields it does not find.
+ * webrtcbin turns the event into an RTCP PLI, and libwebrtc answers a PLI with
+ * an IDR -- the only two moments it emits one, the other being stream start. */
+static void
+request_keyframe (App *self)
+{
+  if (!self->pipeline)
+    return;
+  gst_element_send_event (self->pipeline,
+      gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+          gst_structure_new ("GstForceKeyUnit",
+              "all-headers", G_TYPE_BOOLEAN, TRUE, NULL)));
 }
 
 static void
@@ -856,6 +871,28 @@ on_new_transceiver (GstElement *webrtc, GstWebRTCRTPTransceiver *trans,
                     App *self)
 {
   g_object_set (trans, "do-nack", TRUE, NULL);
+}
+
+/* Watches the encoded stream for the two facts the repair needs: a loss has
+ * happened, and a keyframe has since arrived.
+ *
+ * The order of the two tests is the whole of it -- the first buffer after a
+ * flush is both DISCONT and an IDR, and that one is an arrival, not a hole.
+ *
+ * Runs on a streaming thread and the retry runs on the main one, hence the
+ * atomic; it carries one bit and no ordering is needed beyond the bit itself. */
+static GstPadProbeReturn
+on_encoded_buffer (GstPad *pad, GstPadProbeInfo *info, gpointer data)
+{
+  App *self = data;
+  GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER (info);
+
+  if (GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_DISCONT))
+    g_atomic_int_set (&self->keyframe_wanted, 1);
+  if (!GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_DELTA_UNIT))
+    g_atomic_int_set (&self->keyframe_wanted, 0);
+
+  return GST_PAD_PROBE_OK;
 }
 
 static gboolean
@@ -1670,6 +1707,14 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
    * mid-session. Both are owned by the bin, hence no extra ref kept here. */
   GstElement *tee = gst_bin_get_by_name (GST_BIN (tail), "t");
   self->tee = tee;
+
+  /* The tee's sink pad, because it is the last point where the stream is still
+   * the phone's own access units: h264parse has set DELTA_UNIT by then, and the
+   * decoder below has not yet turned a damaged frame into a picture. */
+  GstPad *watch = gst_element_get_static_pad (tee, "sink");
+  g_atomic_int_set (&self->keyframe_wanted, 0);
+  gst_pad_add_probe (watch, GST_PAD_PROBE_TYPE_BUFFER, on_encoded_buffer, self, NULL);
+  gst_object_unref (watch);
   self->record_mux = g_strdup (mux);
 
   gst_bin_add (GST_BIN (self->pipeline), tail);
@@ -2113,6 +2158,29 @@ poll_stats (gpointer data)
     self->stats_timer = 0;
     return G_SOURCE_REMOVE;
   }
+
+  /* A picture broken by a loss stays broken, and nothing downstream notices.
+   *
+   * rtph264depay request-keyframe=true fires one PLI off the DISCONT the
+   * jitterbuffer marks, and that is the whole of the recovery: if the IDR it
+   * asks for is itself lost -- a quarter of a megabyte at 2304x1440, sent into
+   * the same burst that caused the loss -- nothing asks again. The decoder goes
+   * on painting P-frames against a reference it no longer holds, and on a
+   * screen that has stopped changing the encoder sends nothing that would
+   * overwrite the damage, so it sits there until the user does something
+   * drastic. Netflix is the worst case of exactly this shape: minutes of
+   * full-rate video, a burst of loss at the ceiling, and then a still launcher
+   * whose wallpaper the encoder has no reason to code again.
+   *
+   * d3d11h264dec is what makes it visible rather than merely wrong.
+   * avdec_h264 output-corrupt=false drops the wrecked frame; DXVA has no
+   * equivalent and paints the reference surface's macroblocks into the holes.
+   *
+   * So the ask repeats until it is answered, once a second on the tick that was
+   * already here. It costs one RTCP packet a second while the picture is
+   * broken and nothing at all when it is not. */
+  if (g_atomic_int_get (&self->keyframe_wanted))
+    request_keyframe (self);
 
   /* NULL pad: the whole report rather than one transceiver's. The promise is
    * unreffed by on_stats, which the change func hands it to. */
