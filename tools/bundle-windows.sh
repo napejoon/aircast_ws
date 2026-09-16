@@ -13,6 +13,7 @@
 #   <out>/lib/gio/modules/        libgioopenssl.dll — without it wss:// fails
 #   <out>/libexec/gstreamer-1.0/  gst-plugin-scanner.exe
 #   <out>/share/glib-2.0/schemas/ gschemas.compiled
+#   <out>/share/icons/Adwaita/     the icon theme the toolbar draws from
 set -euo pipefail
 
 PREFIX=/ucrt64
@@ -21,7 +22,8 @@ OUT=${2:-dist/aircast}
 
 rm -rf "$OUT"
 mkdir -p "$OUT"/bin "$OUT"/lib/gstreamer-1.0 "$OUT"/lib/gio/modules \
-         "$OUT"/libexec/gstreamer-1.0 "$OUT"/share/glib-2.0/schemas
+         "$OUT"/libexec/gstreamer-1.0 "$OUT"/share/glib-2.0/schemas \
+         "$OUT"/share/icons
 
 cp "$BUILD/aircast-receiver.exe" "$OUT/bin/"
 # Shipped for the CI smoke test, and for asking a user's machine what it has.
@@ -72,6 +74,25 @@ glib-compile-schemas --targetdir="$OUT/share/glib-2.0/schemas" "$PREFIX/share/gl
 # Startup optimisation only — GIO loads every valid module in the directory
 # when the cache is absent.
 gio-querymodules "$OUT/lib/gio/modules" || true
+
+# The icon theme. libgtk embeds a private handful of symbolic icons, and the
+# toolbar happened to be drawing from those: record, fullscreen and the close
+# glyph are all in there. view-restore-symbolic is not -- and that is the one
+# the fullscreen button switches to *while* fullscreen, so pressing F on a
+# machine with no icon theme installed turned that button blank. The only
+# visible way out of fullscreen, drawn as nothing at all.
+#
+# Shipping the theme rather than picking a fourth name GTK happens to embed:
+# that private set is not an API, and the next icon this program wants would
+# be the same bug again.
+cp -r "$PREFIX/share/icons/Adwaita" "$OUT/share/icons/"
+cp -r "$PREFIX/share/icons/hicolor" "$OUT/share/icons/" 2>/dev/null || true
+
+# A bundle that gets this far with no theme is a bundle whose buttons are
+# blank, and nothing downstream would notice: the smoke test loads plugins,
+# and the MSI size floor is met by the DLLs alone.
+test -s "$OUT/share/icons/Adwaita/index.theme" \
+  || { echo "no icon theme in the bundle -- the toolbar would draw blank" >&2; exit 1; }
 
 du -sh "$OUT"
 echo "bundled $(find "$OUT" -name '*.dll' | wc -l) DLLs into $OUT"
