@@ -18,12 +18,20 @@ const _defaultSignalUrl =
 
 /// Same palette as the receiver's window (receiver/style.css.h), so the two
 /// halves of one product look like one product.
-const _room = Color(0xFF0D0F12);
-const _card = Color(0xFF15181D);
-const _edge = Color(0xFF23272E);
-const _ink = Color(0xFFF2F5F9);
-const _muted = Color(0xFF6F7784);
-const _live = Color(0xFF3DDC91);
+const _room = Color(0xFF0B1214);
+const _card = Color(0xFF131B1D);
+const _edge = Color(0xFF1F2B2D);
+const _ink = Color(0xFFEFF7F7);
+const _muted = Color(0xFF6D8384);
+
+/// Turquoise. The one saturated colour in the palette, so it is spent on the
+/// wordmark and on the dot that answers "am I still sharing my screen?" and on
+/// nothing else.
+const _brand = Color(0xFF3DDCD0);
+
+/// A live connection is the brand colour rather than a green of its own: two
+/// near-identical greens on one card read as two states, and there is only one.
+const _live = _brand;
 const _alarm = Color(0xFFFF6B5E);
 
 void main() => runApp(const AircastApp());
@@ -259,7 +267,7 @@ class _SenderPageState extends State<SenderPage> {
                   _PillButton(
                     label: _busy ? 'Connecting…' : 'Start mirroring',
                     onPressed: _busy ? null : _castOverNetwork,
-                    background: _ink,
+                    background: _brand,
                     foreground: _room,
                   ),
                   if (Platform.isAndroid) ...[
@@ -295,7 +303,7 @@ class _Header extends StatelessWidget {
               fontSize: 13,
               fontWeight: FontWeight.w600,
               letterSpacing: 3,
-              color: _muted,
+              color: _brand,
             ),
           ),
           const Spacer(),
