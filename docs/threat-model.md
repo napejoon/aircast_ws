@@ -148,7 +148,7 @@ and expensive to skip are 1, 4, 5 and 10.
 5. **Hash it yourself:** `certutil -hashfile <msi> SHA256`.
 6. **Write `aircast-update.json` by hand.** Five fields:
    ```json
-   {"schema":1,"product":"aircast-receiver","version":"1.4.0","asset":"Aircast-Receiver-1.4.0-x64.msi","sha256":"<64 hex>"}
+   {"schema":1,"product":"aircast-receiver","version":"1.4.0","asset":"Quoise-1.4.0-x64.msi","sha256":"<64 hex>"}
    ```
 7. **Sign it, and confirm the algorithm tag:**
    ```
@@ -165,9 +165,9 @@ and expensive to skip are 1, 4, 5 and 10.
    apksigner second, and nothing touches the zip afterwards — apksigner's
    signature covers the file layout, so aligning a signed APK invalidates it:
    ```
-   zipalign -P 16 -f 4 Aircast-Sender-X.Y.Z-unsigned.apk Aircast-Sender-X.Y.Z.apk
-   apksigner sign --ks aircast-sender.jks --ks-key-alias aircast Aircast-Sender-X.Y.Z.apk
-   apksigner verify --print-certs --verbose Aircast-Sender-X.Y.Z.apk
+   zipalign -P 16 -f 4 Quoise-X.Y.Z-unsigned.apk Quoise-X.Y.Z.apk
+   apksigner sign --ks aircast-sender.jks --ks-key-alias aircast Quoise-X.Y.Z.apk
+   apksigner verify --print-certs --verbose Quoise-X.Y.Z.apk
    ```
    `-P 16` is for the 16 KB-page devices; the APK carries uncompressed `.so`
    files from libwebrtc and the Flutter engine. Pass no `--v1/--v2/--v3` and no
@@ -176,7 +176,7 @@ and expensive to skip are 1, 4, 5 and 10.
    overriding the manifest with a guess. The verify must print `v2 …: true` and
    a certificate fingerprint you recognise.
    Then upload `aircast-update.json`, its `.minisig` and the signed APK, remove
-   the unsigned one (`gh release delete-asset vX.Y.Z Aircast-Sender-X.Y.Z-unsigned.apk`)
+   the unsigned one (`gh release delete-asset vX.Y.Z Quoise-X.Y.Z-unsigned.apk`)
    so nobody downloads a file that cannot install, and publish
    (`gh release edit vX.Y.Z --draft=false`).
    Publishing is what makes the assets immutable; the draft window is mutable by

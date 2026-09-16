@@ -30,7 +30,7 @@ jobs:
       - name: Keep MSYS2 tools away from CRLF
         shell: bash
         run: git config --global core.autocrlf input
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
         with:
           msystem: UCRT64
@@ -78,12 +78,12 @@ jobs:
           # Open Source Maintenance Fee EULA. See ci.yml.
           dotnet tool install --global wix --version 5.0.2
           wix extension add -g WixToolset.UI.wixext/5.0.2
-          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
-          wix msi validate -ice ICE105 "Aircast-Receiver-$env:VERSION-x64.msi"
+          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Quoise-$env:VERSION-x64.msi"
+          wix msi validate -ice ICE105 "Quoise-$env:VERSION-x64.msi"
           # A harvest that finds nothing is a warning, not an error, and produces
           # a 35 KB installer that installs a program which cannot start. The
           # bundle is ~350 MB; anything under 100 MB means harvesting broke.
-          $msi = Get-Item "Aircast-Receiver-$env:VERSION-x64.msi"
+          $msi = Get-Item "Quoise-$env:VERSION-x64.msi"
           "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
           if ($msi.Length -lt 100MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
 
@@ -92,7 +92,7 @@ jobs:
         # The one check that looks at what a user ends up with rather than at
         # what we staged. See ci.yml.
         run: |
-          $msi = (Get-Item "Aircast-Receiver-$env:VERSION-x64.msi").FullName
+          $msi = (Get-Item "Quoise-$env:VERSION-x64.msi").FullName
           $dir = Join-Path $PWD "extracted"
           $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$msi`"", '/qn', "TARGETDIR=`"$dir`""
           if ($p.ExitCode -ne 0) { throw "administrative install failed with $($p.ExitCode)" }
@@ -111,10 +111,10 @@ jobs:
           # the working directory, so it must not be left lying next to the MSI.
           Remove-Item $dir -Recurse -Force
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: msi
-          path: Aircast-Receiver-*-x64.msi
+          path: Quoise-*-x64.msi
           if-no-files-found: error
 
   apk:
@@ -123,8 +123,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: "17"
@@ -177,7 +177,7 @@ jobs:
             ls -l build/app/outputs/apk/release/ >&2
             exit 1
           }
-          mv "$APK" "$GITHUB_WORKSPACE/Aircast-Sender-$VERSION-unsigned.apk"
+          mv "$APK" "$GITHUB_WORKSPACE/Quoise-$VERSION-unsigned.apk"
 
       - name: Not an empty box
         # The MSI job's size check, for an APK. This is the first build in which
@@ -185,16 +185,16 @@ jobs:
         # the Dart snapshot still zips up fine, still installs, and shows
         # nothing. libapp.so exists only in an AOT build.
         run: |
-          APK="Aircast-Sender-$VERSION-unsigned.apk"
+          APK="Quoise-$VERSION-unsigned.apk"
           ls -l "$APK"
           for so in libapp.so libflutter.so; do
             unzip -l "$APK" | grep -q "lib/arm64-v8a/$so" || { echo "APK contains no $so"; exit 1; }
           done
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: apk
-          path: Aircast-Sender-*-unsigned.apk
+          path: Quoise-*-unsigned.apk
           if-no-files-found: error
 
   attest:
@@ -208,20 +208,20 @@ jobs:
     steps:
       # This job contains no project code on purpose: it downloads the exact
       # artifacts that will be released and does one thing to them.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: msi
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: apk
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           # This covers the bytes that go *into* apksigner, not the signed APK a
           # user installs: signing changes the digest, and it happens on a
           # machine Actions cannot reach.
           subject-path: |
-            Aircast-Receiver-*-x64.msi
-            Aircast-Sender-*-unsigned.apk
+            Quoise-*-x64.msi
+            Quoise-*-unsigned.apk
 
   draft:
     name: Draft release
@@ -230,10 +230,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: msi
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: apk
       - name: Release notes
@@ -245,7 +245,7 @@ jobs:
           Any asset here whose name ends `-unsigned.apk` cannot be installed:
           Android refuses an unsigned package. It is the input to the
           maintainer's offline signing step, and the signed
-          `Aircast-Sender-<version>.apk` replaces it before this release is
+          `Quoise-<version>.apk` replaces it before this release is
           published.
 
           This bundle redistributes GLib, GTK and GStreamer under the LGPL; the
@@ -261,5 +261,5 @@ jobs:
         # make the Actions token enough to ship an update notice, which is
         # exactly what the offline key exists to prevent.
         run: |
-          gh release create "$TAG" Aircast-Receiver-*-x64.msi Aircast-Sender-*-unsigned.apk \
+          gh release create "$TAG" Quoise-*-x64.msi Quoise-*-unsigned.apk \
             --repo "$GITHUB_REPOSITORY" --draft --verify-tag --notes-file notes.md
