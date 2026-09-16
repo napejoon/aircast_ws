@@ -52,6 +52,11 @@
 "  padding-left: 14px;"
 "}"
 
+/* The plate is drawn by the widget, so all this owns is the space around it. */
+".qr {"
+"  margin: 14px 0 4px 0;"
+"}"
+
 ".status {"
 "  font-size: 12px;"
 "  color: #6d8384;"

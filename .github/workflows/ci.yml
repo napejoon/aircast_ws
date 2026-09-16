@@ -46,7 +46,7 @@ jobs:
             build-essential cmake pkg-config libgtk-4-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev \
-            libjson-glib-dev libsoup-3.0-dev libsodium-dev
+            libjson-glib-dev libsoup-3.0-dev libsodium-dev libqrencode-dev
       - name: Build
         run: |
           cmake -S receiver -B receiver/build -DCMAKE_C_FLAGS="-Wall -Werror"
@@ -188,7 +188,7 @@ jobs:
             gtk4:p gstreamer:p gst-plugins-base:p gst-plugins-good:p
             gst-plugins-bad:p gst-plugins-bad-libs:p gst-plugins-rs:p
             gst-libav:p json-glib:p libsoup3:p glib-networking:p libsodium:p
-            adwaita-icon-theme:p
+            adwaita-icon-theme:p qrencode:p
 
       - name: Version
         # The tag is the only source of truth. A non-tag build stamps 0.0.0, so
