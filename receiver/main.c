@@ -123,6 +123,7 @@ typedef struct {
   GtkWidget *strip_readings;    /* the six cells, foldable as a group */
   GtkWidget *fullscreen_button; /* its icon turns over with the state */
   gboolean strip_was_shown;     /* folded state, remembered across fullscreen */
+  gboolean was_maximized;       /* window state to restore when fullscreen ends */
   GtkWidget *strip_toggle;      /* the chevron that folds them */
   guint stats_timer;            /* 1 Hz while a session is up, 0 otherwise */
   guint64 last_lost, last_recv; /* so loss reads per second, not per session */
@@ -464,10 +465,16 @@ static void
 on_fullscreen_clicked (GtkButton *button, App *self)
 {
   GtkWindow *window = GTK_WINDOW (self->window);
-  if (gtk_window_is_fullscreen (window))
+  if (gtk_window_is_fullscreen (window)) {
     gtk_window_unfullscreen (window);
-  else
+  } else {
+    /* Recorded before the transition, because it is the only moment the answer
+     * is certainly right: unfullscreening restores the window's size but not
+     * its maximised state, so a mirror opened maximised, put fullscreen and
+     * brought back came out as a small window in the middle of the screen. */
+    self->was_maximized = gtk_window_is_maximized (window);
     gtk_window_fullscreen (window);
+  }
 }
 
 /* Fullscreen means the mirror and nothing else.
@@ -493,9 +500,17 @@ on_fullscreen_changed (GObject *window, GParamSpec *pspec, App *self)
 
   if (full) {
     self->strip_was_shown = gtk_widget_get_visible (self->strip);
+    /* Also read here, for the route that does not come through the button:
+     * a window manager can fullscreen a window on its own. */
+    if (gtk_window_is_maximized (GTK_WINDOW (window)))
+      self->was_maximized = TRUE;
     gtk_widget_add_css_class (self->window, "immersive");
   } else {
     gtk_widget_remove_css_class (self->window, "immersive");
+    if (self->was_maximized) {
+      gtk_window_maximize (GTK_WINDOW (window));
+      self->was_maximized = FALSE;
+    }
   }
   gtk_widget_set_visible (self->strip, full ? FALSE : self->strip_was_shown);
   gtk_widget_set_tooltip_text (self->fullscreen_button,
