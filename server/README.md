@@ -1,4 +1,4 @@
-# aircast signalling server
+# Quoise signalling server
 
 One file, one WebSocket, no database. Protocol: `docs/protocol/signalling.md`.
 It pairs two peers on a 6-digit code, buffers the offer, relays candidates and

@@ -1,4 +1,4 @@
-# aircast sender
+# Quoise sender
 
 Flutter screen sender. The UI is the other half of the receiver's: same dark
 palette, and the six digits the desktop shows in large type are typed back in

@@ -41,7 +41,7 @@ class AircastApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'aircast',
+        title: 'Quoise',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           useMaterial3: true,
@@ -298,7 +298,7 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) => Row(
         children: [
           const Text(
-            'AIRCAST',
+            'QUOISE',
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,

@@ -1,4 +1,8 @@
-/* aircast receiver — GTK4 window around a GStreamer webrtcbin.
+/* Quoise — GTK4 window around a GStreamer webrtcbin.
+ *
+ * The binary, the GApplication id and the update manifest's product key all
+ * still say aircast-receiver: those are identifiers other things are matched
+ * against, and renaming them would orphan every copy already installed.
  *
  * Shape of the UI, which is deliberately Reflector-like: a dark room with
  * nothing in it but the pairing code until a phone connects, then the mirrored
@@ -1855,7 +1859,7 @@ build_idle_page (App *self)
   gtk_widget_set_valign (box, GTK_ALIGN_CENTER);
   gtk_widget_add_css_class (box, "card");
 
-  GtkWidget *title = gtk_label_new ("aircast");
+  GtkWidget *title = gtk_label_new ("Quoise");
   gtk_widget_add_css_class (title, "title");
 
   GtkWidget *hint = gtk_label_new ("On your phone, open aircast and enter this code");
@@ -2351,7 +2355,7 @@ activate (GtkApplication *app, gpointer user_data)
   g_object_set (gtk_settings_get_default (), "gtk-label-select-on-focus", FALSE, NULL);
 
   self->window = gtk_application_window_new (app);
-  gtk_window_set_title (GTK_WINDOW (self->window), "aircast");
+  gtk_window_set_title (GTK_WINDOW (self->window), "Quoise");
   gtk_window_set_default_size (GTK_WINDOW (self->window), 1100, 760);
   gtk_widget_add_css_class (self->window, "room");
 
@@ -2551,7 +2555,7 @@ main (int argc, char *argv[])
   }
 #endif
 
-  GOptionContext *ctx = g_option_context_new ("- aircast receiver");
+  GOptionContext *ctx = g_option_context_new ("- Quoise");
   g_option_context_add_main_entries (ctx, entries, NULL);
   g_option_context_add_group (ctx, gst_init_get_option_group ());
   GError *error = NULL;

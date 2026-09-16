@@ -360,8 +360,8 @@ class UsbCastService : Service() {
             PendingIntent.FLAG_IMMUTABLE,
         )
         val notification: Notification = Notification.Builder(this, CHANNEL_ID)
-            // Not "aircast": the notification header already carries the app
-            // name and the icon, so that title line was spent saying something
+            // Not the app's name: the notification header already carries
+            // that and the icon, so the title line was spent saying something
             // the user could already see. This is the one sentence someone
             // reads out of the corner of their eye while using another app, so
             // it answers the thing they are actually worried about, in the same

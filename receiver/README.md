@@ -1,4 +1,4 @@
-# aircast receiver
+# Quoise receiver
 
 A GTK4 window around a GStreamer `webrtcbin`. Dark room, the pairing code until
 a phone connects, then the mirrored screen in a device bezel with a toolbar that

@@ -1,4 +1,6 @@
-# aircast
+# Quoise
+
+Said like the end of *turquoise*: **kwoyz**. The window is that colour.
 
 [![CI](https://github.com/napejoon/aircast_ws/actions/workflows/ci.yml/badge.svg)](https://github.com/napejoon/aircast_ws/actions/workflows/ci.yml)
 
