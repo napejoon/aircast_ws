@@ -43,7 +43,7 @@ jobs:
             gtk4:p gstreamer:p gst-plugins-base:p gst-plugins-good:p
             gst-plugins-bad:p gst-plugins-bad-libs:p gst-plugins-rs:p
             gst-libav:p json-glib:p libsoup3:p glib-networking:p libsodium:p
-            adwaita-icon-theme:p
+            adwaita-icon-theme:p qrencode:p
 
       - name: Version
         run: |

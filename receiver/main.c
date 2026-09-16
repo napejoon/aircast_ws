@@ -29,6 +29,7 @@
  */
 
 #include <gtk/gtk.h>
+#include <qrencode.h>
 #include <gst/gst.h>
 #include <gst/sdp/sdp.h>
 #define GST_USE_UNSTABLE_API
@@ -1906,6 +1907,94 @@ on_wireless_display_clicked (GtkButton *button, App *self)
 }
 #endif
 
+/* The pairing QR, drawn rather than fetched: every byte of it is already in
+ * this process.
+ *
+ * The payload carries the signalling URL as well as the code --
+ * aircast://pair?c=<code>&s=<url> -- which is the whole reason it exists. A QR
+ * of the six digits alone would save four seconds of typing; carrying the URL
+ * is what lets one APK talk to whichever server the person in front of this
+ * screen is running, instead of the one it was compiled against.
+ *
+ * Dark modules on a white plate, not inverted to match the card. An inverted
+ * code is legal and most scanners read it, "most" being the problem: this is
+ * the one thing on the screen whose whole job is to be read by a camera held
+ * by someone who will blame the app, not their scanner.
+ *
+ * Whole-pixel modules. A fractional module size leaves a seam of background
+ * between neighbours after antialiasing, and a scanner reading a 25-module
+ * code off a screen has little enough contrast budget without it.
+ */
+static void
+draw_pairing_qr (GtkDrawingArea *area, cairo_t *cr, int width, int height,
+    gpointer data)
+{
+  QRcode *qr = g_object_get_data (G_OBJECT (area), "qr");
+  if (!qr)
+    return;
+
+  /* Four modules, which is what the spec asks for and what a scanner needs to
+   * find the code's edge against whatever is behind it. */
+  const int quiet = 4;
+  int span = qr->width + quiet * 2;
+  int module = MAX (1, MIN (width, height) / span);
+  int side = module * span;
+  double ox = (width - side) / 2.0;
+  double oy = (height - side) / 2.0;
+
+  cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
+  cairo_rectangle (cr, ox, oy, side, side);
+  cairo_fill (cr);
+
+  /* #0b1214, the window behind the card: the code reads as a hole cut in the
+   * screen rather than as ink printed on it. */
+  cairo_set_source_rgb (cr, 0.043, 0.071, 0.078);
+  for (int y = 0; y < qr->width; y++) {
+    for (int x = 0; x < qr->width; x++) {
+      if (qr->data[y * qr->width + x] & 1)
+        cairo_rectangle (cr, ox + (x + quiet) * module, oy + (y + quiet) * module,
+            module, module);
+    }
+  }
+  cairo_fill (cr);
+}
+
+static GtkWidget *
+build_pairing_qr (App *self)
+{
+  GtkWidget *area = gtk_drawing_area_new ();
+  gtk_widget_add_css_class (area, "qr");
+  gtk_widget_set_halign (area, GTK_ALIGN_CENTER);
+  /* A multiple of the module count plus its quiet zone, so the integer module
+   * size above lands on this exactly rather than leaving a margin. */
+  gtk_widget_set_size_request (area, 186, 186);
+
+  /* Escaped, because the URL carries :// and a query of its own and this one is
+   * a query value. */
+  gchar *escaped = g_uri_escape_string (self->signal_url ? self->signal_url : "",
+      NULL, FALSE);
+  gchar *payload = g_strdup_printf ("aircast://pair?c=%s&s=%s", self->code, escaped);
+  g_free (escaped);
+
+  /* Level M: a quarter of the code can be lost and still read, which is the
+   * level every phone camera pointed at a lit screen was tuned against.
+   * Version 0 asks libqrencode for the smallest that fits, so the modules stay
+   * as large as the payload allows. Case-sensitive, because the URL is. */
+  QRcode *qr = QRcode_encodeString (payload, 0, QR_ECLEVEL_M, QR_MODE_8, 1);
+  if (qr) {
+    g_object_set_data_full (G_OBJECT (area), "qr", qr, (GDestroyNotify) QRcode_free);
+  } else {
+    /* An unencodable payload is not worth ending a cast over -- the six digits
+     * below still pair. The blank square would be a lie, so the widget goes. */
+    g_warning ("the pairing payload would not encode as a QR: %s", payload);
+    gtk_widget_set_visible (area, FALSE);
+  }
+  g_free (payload);
+
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (area), draw_pairing_qr, self, NULL);
+  return area;
+}
+
 static GtkWidget *
 build_idle_page (App *self)
 {
@@ -1917,7 +2006,7 @@ build_idle_page (App *self)
   GtkWidget *title = gtk_label_new ("Quoise");
   gtk_widget_add_css_class (title, "title");
 
-  GtkWidget *hint = gtk_label_new ("On your phone, open aircast and enter this code");
+  GtkWidget *hint = gtk_label_new ("Scan this with Quoise on your phone, or type the code");
   gtk_widget_add_css_class (hint, "hint");
 
   /* Shown 482 913 rather than 482913. Six digits with nothing to break them
@@ -1946,6 +2035,7 @@ build_idle_page (App *self)
 
   gtk_box_append (GTK_BOX (box), title);
   gtk_box_append (GTK_BOX (box), hint);
+  gtk_box_append (GTK_BOX (box), build_pairing_qr (self));
   gtk_box_append (GTK_BOX (box), self->code_label);
   self->update_label = gtk_label_new ("");
   gtk_widget_add_css_class (self->update_label, "status");

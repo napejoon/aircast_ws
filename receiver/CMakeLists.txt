@@ -22,6 +22,11 @@ pkg_check_modules(DEPS REQUIRED
     gstreamer-webrtc-1.0
     json-glib-1.0
     libsoup-3.0
+    # The pairing QR. Not hand-rolled: a QR encoder is Reed-Solomon, a mask
+    # score and a version table, and getting any of the three subtly wrong
+    # produces a code that scans on the phone it was tested with and on no
+    # other. libqrencode is in MSYS2 and in Debian, so both CI jobs have it.
+    libqrencode
     # Ed25519 + BLAKE2b for the update manifest signature. Windows CNG is not an
     # alternative: bcrypt.h defines Curve25519 for ECDH only, with no EdDSA
     # algorithm identifier.
