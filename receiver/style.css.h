@@ -6,7 +6,7 @@
  */
 
 "window.room {"
-"  background: #0d0f12;"
+"  background: #0b1214;"
 "}"
 
 /* ------------------------------------------------------------- idle card */
@@ -14,8 +14,8 @@
 ".card {"
 "  padding: 40px 56px;"
 "  border-radius: 22px;"
-"  background: #15181d;"
-"  border: 1px solid #23272e;"
+"  background: #131b1d;"
+"  border: 1px solid #1f2b2d;"
 "  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);"
 "}"
 
@@ -24,13 +24,17 @@
 "  font-weight: 600;"
 "  letter-spacing: 3px;"
 "  text-transform: uppercase;"
-"  color: #6f7784;"
+/* The wordmark is the one place the brand colour belongs on a card whose job
+ * is to be read across a room: the code below it stays the brightest thing
+ * there, because a six-digit code someone is squinting at is not the place to
+ * spend contrast on identity. */
+"  color: #3ddcd0;"
 "  margin-bottom: 18px;"
 "}"
 
 ".hint {"
 "  font-size: 14px;"
-"  color: #98a1ae;"
+"  color: #96acad;"
 "}"
 
 /* The code is the one thing a user has to read across a room. */
@@ -39,7 +43,7 @@
 "  font-weight: 700;"
 "  letter-spacing: 14px;"
 "  font-feature-settings: 'tnum' 1;"
-"  color: #f2f5f9;"
+"  color: #eff7f7;"
 "  margin: 14px 0 8px 0;"
 /* Letter-spacing is applied after every character including the last, so the
  * label is 14 px wider on the right than the digits are, and a centred label
@@ -50,7 +54,7 @@
 
 ".status {"
 "  font-size: 12px;"
-"  color: #6f7784;"
+"  color: #6d8384;"
 "}"
 
 /* ---------------------------------------------------------- mirrored screen */
@@ -62,8 +66,8 @@
 "  padding: 14px;"
 "  margin: 32px;"
 "  border-radius: 34px;"
-"  background: #05070a;"
-"  border: 1px solid #2b3038;"
+"  background: #04090a;"
+"  border: 1px solid #273334;"
 "  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);"
 "}"
 
@@ -85,13 +89,13 @@
  * than as a card floating in it, so it has one hairline above it and no
  * radius, no shadow and no fill of its own beyond a shade off the room. */
 ".strip {"
-"  background: #101317;"
-"  border-top: 1px solid #232830;"
+"  background: #0e1618;"
+"  border-top: 1px solid #1f2c2e;"
 "}"
 
 ".cell {"
 "  padding: 8px 16px;"
-"  border-right: 1px solid #232830;"
+"  border-right: 1px solid #1f2c2e;"
 "}"
 
 /* The readings sit in their own box (build_strip), so this is the last of them
@@ -105,7 +109,7 @@
 "  font-size: 9px;"
 "  font-weight: 700;"
 "  letter-spacing: 2px;"
-"  color: #4E5661;"
+"  color: #4A5F60;"
 "}"
 
 /* Monospaced and tabular: these numbers change every second, and in a
@@ -114,12 +118,12 @@
 "  font-family: monospace;"
 "  font-size: 12px;"
 "  font-feature-settings: 'tnum' 1;"
-"  color: #f2f5f9;"
+"  color: #eff7f7;"
 "}"
 
 ".cell-state {"
 "  font-size: 12px;"
-"  color: #c9d1dc;"
+"  color: #c7dadb;"
 "}"
 
 /* A disc drawn by the box rather than by a glyph, so it does not depend on
@@ -129,16 +133,16 @@
 "  min-width: 8px;"
 "  min-height: 8px;"
 "  border-radius: 999px;"
-"  background: #4E5661;"
+"  background: #4A5F60;"
 "}"
 
-/* The halo, not a bigger disc: the strip is 8 px of colour against #101317 and
+/* The halo, not a bigger disc: the strip is 8 px of colour against #0e1618 and
  * the eye skips it. A ring at a sixth of the same colour is visible from the
  * far side of a desk and takes no room the row has to give up, because a
  * box-shadow is drawn outside the layout. */
 ".beacon.live {"
-"  background: #3ddc91;"
-"  box-shadow: 0 0 0 3px rgba(61, 220, 145, 0.16);"
+"  background: #3ddcd0;"
+"  box-shadow: 0 0 0 3px rgba(61, 220, 208, 0.16);"
 "}"
 
 ".beacon.bad {"
@@ -155,8 +159,8 @@
  * the window's frame now rather than an object sitting on the video. */
 ".toolbar {"
 "  padding: 6px 10px;"
-"  background: #101317;"
-"  border-top: 1px solid #232830;"
+"  background: #0e1618;"
+"  border-top: 1px solid #1f2c2e;"
 "}"
 
 "button.tool {"
@@ -166,11 +170,11 @@
 "  border-radius: 999px;"
 "  border: none;"
 "  background: transparent;"
-"  color: #c9d1dc;"
+"  color: #c7dadb;"
 "}"
 
 "button.tool:hover {"
-"  background: #242a33;"
+"  background: #212f30;"
 "  color: #ffffff;"
 "}"
 
@@ -178,9 +182,9 @@
  * The same fill as hover plus an outline, because the fill alone is the state
  * the pointer already uses and would not say which button holds focus. */
 "button.tool:focus-visible {"
-"  background: #242a33;"
+"  background: #212f30;"
 "  color: #ffffff;"
-"  outline: 2px solid #4E5661;"
+"  outline: 2px solid #3ddcd0;"
 "  outline-offset: -2px;"
 "}"
 
@@ -208,12 +212,12 @@
 "  min-width: 26px;"
 "  min-height: 26px;"
 "  margin: 0 6px;"
-"  color: #4E5661;"
+"  color: #4A5F60;"
 "}"
 
 "button.strip-toggle:hover {"
-"  background: #1B1F26;"
-"  color: #c9d1dc;"
+"  background: #192426;"
+"  color: #c7dadb;"
 "}"
 
 /* Fullscreen is the mirror and nothing else: the frame that makes this read as
