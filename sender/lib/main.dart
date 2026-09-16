@@ -34,6 +34,18 @@ const _brand = Color(0xFF3DDCD0);
 const _live = _brand;
 const _alarm = Color(0xFFFF6B5E);
 
+/// Amber, for the state between working and failed: reconnecting, waiting,
+/// degraded. It had no colour of its own before, so a link dropping looked
+/// either fine or fatal and never like what it is. Sits opposite the
+/// turquoise on the wheel, which is what makes it read as a change of state
+/// rather than a shade of the same one.
+const _caution = Color(0xFFFFC857);
+
+/// Indigo, for the second way to do the same thing -- the USB path beside the
+/// network one. Between the turquoise and the coral on the wheel, so it is
+/// visibly not either of them and competes with neither.
+const _accent = Color(0xFF9D8DF7);
+
 void main() => runApp(const AircastApp());
 
 class AircastApp extends StatelessWidget {
@@ -84,9 +96,22 @@ class _SenderPageState extends State<SenderPage> {
 
   bool get _casting => _session != null || _usb;
 
+  /// Owned here rather than left to `autofocus` on the field.
+  ///
+  /// _casting is a getter over _session, so every stop rebuilds _CodeCard from
+  /// nothing -- and an autofocus on a field that is created afresh summons the
+  /// keyboard every time. Start a cast with no network and the failure is
+  /// immediate: the card goes, the card comes back, the keyboard comes up, and
+  /// pressing Start again does the same thing. That is the bounce. Focused once
+  /// when the page opens, which is the one moment it is wanted.
+  final _codeFocus = FocusNode();
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _codeFocus.requestFocus();
+    });
     if (Platform.isAndroid) {
       // Fires when Android takes the capture away — consent revoked, the screen
       // locking, another app claiming the projection — and now also when the
@@ -126,14 +151,22 @@ class _SenderPageState extends State<SenderPage> {
       _busy = true;
       _status = 'Connecting…';
     });
-    signaling.onClosed = (reason) => _stop(status: reason);
+    // Guarded the way onStats below is, and for the same reason. These
+    // callbacks outlive the attempt that installed them: the socket from a
+    // cast that dropped can report itself closed after the user has pressed
+    // Start again, and an unguarded _stop then tears down the attempt they
+    // just made. From the outside that is a button that does nothing.
+    signaling.onClosed = (reason) {
+      if (_signaling != signaling) return;
+      _stop(status: reason);
+    };
     session.onStats = (s) {
       // A tick can land after the widget is gone, and after _stop has replaced
       // the session: both would be a setState on a dead State.
       if (mounted && _session == session) setState(() => _stats = s);
     };
     session.onState = (state) {
-      if (!mounted) return;
+      if (!mounted || _session != session) return;
       switch (state) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
           setState(() {
@@ -222,6 +255,7 @@ class _SenderPageState extends State<SenderPage> {
     _stop();
     _code.dispose();
     _url.dispose();
+    _codeFocus.dispose();
     super.dispose();
   }
 
@@ -238,16 +272,33 @@ class _SenderPageState extends State<SenderPage> {
                   onSettings: () => setState(() => _settingsOpen = !_settingsOpen),
                 ),
                 if (_settingsOpen) _ServerField(controller: _url, enabled: !_casting),
+                // Centred while there is room and scrollable when there is not.
+                // The card is a fixed height and the keyboard takes about half
+                // the screen, so a plain Center had nowhere to put it and Flutter
+                // drew BOTTOM OVERFLOWED BY 36 PIXELS across the bottom of the
+                // one card the user is trying to type into.
                 Expanded(
-                  child: Center(
-                    child: _casting
-                        ? _CastingCard(
-                            code: _code.text,
-                            usb: _usb,
-                            connected: _connected,
-                            stats: _stats,
-                          )
-                        : _CodeCard(controller: _code, onSubmit: _castOverNetwork),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => SingleChildScrollView(
+                      child: ConstrainedBox(
+                        constraints:
+                            BoxConstraints(minHeight: constraints.maxHeight),
+                        child: Center(
+                          child: _casting
+                              ? _CastingCard(
+                                  code: _code.text,
+                                  usb: _usb,
+                                  connected: _connected,
+                                  stats: _stats,
+                                )
+                              : _CodeCard(
+                                  controller: _code,
+                                  focusNode: _codeFocus,
+                                  onSubmit: _castOverNetwork,
+                                ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
                 Text(
@@ -276,7 +327,10 @@ class _SenderPageState extends State<SenderPage> {
                       label: 'Mirror over USB cable',
                       onPressed: _castOverUsb,
                       background: _card,
-                      foreground: _ink,
+                      // Indigo: the second way to do the same thing. It reads as
+                      // a choice beside the turquoise button rather than as a
+                      // lesser version of it, which grey on grey did.
+                      foreground: _accent,
                     ),
                   ],
                 ],
@@ -316,7 +370,11 @@ class _Header extends StatelessWidget {
               margin: const EdgeInsets.only(right: 12),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: connected ? _live : _alarm,
+                // Amber, not coral. A cast that is up but not yet connected --
+                // or reconnecting after the link dropped -- is not a failure,
+                // and painting it in the same colour as one told the user their
+                // screen had stopped going out when it was about to resume.
+                color: connected ? _live : _caution,
               ),
             ),
           IconButton(
@@ -359,9 +417,14 @@ class _ServerField extends StatelessWidget {
 /// The code entry, mirroring the receiver's oversized display of the same six
 /// digits: one number, read off one screen, typed into another.
 class _CodeCard extends StatelessWidget {
-  const _CodeCard({required this.controller, required this.onSubmit});
+  const _CodeCard({
+    required this.controller,
+    required this.focusNode,
+    required this.onSubmit,
+  });
 
   final TextEditingController controller;
+  final FocusNode focusNode;
   final VoidCallback onSubmit;
 
   @override
@@ -371,7 +434,7 @@ class _CodeCard extends StatelessWidget {
           const SizedBox(height: 18),
           TextField(
             controller: controller,
-            autofocus: true,
+            focusNode: focusNode,
             textAlign: TextAlign.center,
             keyboardType: TextInputType.number,
             inputFormatters: [

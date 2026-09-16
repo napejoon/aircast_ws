@@ -1335,7 +1335,10 @@ on_ws_closed (SoupWebsocketConnection *ws, App *self)
     drop_session (self);
     /* After drop_session, which sets the neutral text: no phone can reach
      * this window until on_connected turns it back. */
-    set_strip_state (self, "bad", "Reconnecting to the server");
+    /* warn, not bad. The socket going is not the cast failing: the next
+     * attempt is a second away and usually works, and painting it the same
+     * colour as a failure told the user it was over when it was not. */
+    set_strip_state (self, "warn", "Reconnecting to the server");
   }
 
   if (self->reconnect_source)
@@ -2069,6 +2072,7 @@ set_strip_state (App *self, const gchar *css, const gchar *text)
   if (!self->strip_dot)
     return;
   gtk_widget_remove_css_class (self->strip_dot, "live");
+  gtk_widget_remove_css_class (self->strip_dot, "warn");
   gtk_widget_remove_css_class (self->strip_dot, "bad");
   if (css)
     gtk_widget_add_css_class (self->strip_dot, css);

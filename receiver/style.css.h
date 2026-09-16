@@ -145,6 +145,14 @@
 "  box-shadow: 0 0 0 3px rgba(61, 220, 208, 0.16);"
 "}"
 
+/* Amber for the state between working and failed. A link that dropped and is
+ * being retried is neither, and it had no colour of its own: it borrowed the
+ * failure red and said the cast was over a second before it came back. */
+".beacon.warn {"
+"  background: #ffc857;"
+"  box-shadow: 0 0 0 3px rgba(255, 200, 87, 0.16);"
+"}"
+
 ".beacon.bad {"
 "  background: #ff6b5e;"
 "  box-shadow: 0 0 0 3px rgba(255, 107, 94, 0.16);"
