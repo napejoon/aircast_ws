@@ -224,8 +224,10 @@ class UsbCastService : Service() {
      */
     private fun serve() {
         val codec = this.codec ?: return
+        var mine: LocalServerSocket? = null
         try {
             val server = LocalServerSocket(socketName)
+            mine = server
             serverSocket = server
             server.use {
                 while (running) {
@@ -247,7 +249,14 @@ class UsbCastService : Service() {
                 stopSelf()
             }
         } finally {
-            serverSocket = null
+            // Only if it is still ours. This thread is woken by the connect
+            // stopCasting makes to its own name, and nothing orders its return
+            // against the next cast's serve() setting the field to a new
+            // socket. Clearing unconditionally could therefore hide the next
+            // cast's listener from the next stopCasting, which would leave the
+            // name bound and fail the cast after that on "Address already in
+            // use" -- the failure the connect above exists to prevent.
+            if (serverSocket === mine) serverSocket = null
         }
     }
 
