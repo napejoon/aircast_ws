@@ -1865,6 +1865,13 @@ build_live_page (App *self)
   gtk_widget_add_css_class (bezel, "bezel");
 
   self->picture = gtk_picture_new ();
+  /* CONTAIN, and the bars it leaves are a decision the user made rather than
+   * something nobody noticed. The tablet is 2304x1440 (1.60) and the notebook
+   * 1920x1080 (1.78), so a correctly shaped picture leaves about 130 px down
+   * each side even in fullscreen. COVER would fill the screen and is one
+   * identifier away, but it fills it by cropping a tenth off the top and
+   * bottom of the tablet's screen -- which takes the status bar with its clock
+   * and battery, and the dock. Asked directly, the user kept the bars. */
   gtk_picture_set_content_fit (GTK_PICTURE (self->picture), GTK_CONTENT_FIT_CONTAIN);
   gtk_widget_set_hexpand (self->picture, TRUE);
   gtk_widget_set_vexpand (self->picture, TRUE);
