@@ -78,12 +78,12 @@ jobs:
           # Open Source Maintenance Fee EULA. See ci.yml.
           dotnet tool install --global wix --version 5.0.2
           wix extension add -g WixToolset.UI.wixext/5.0.2
-          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
-          wix msi validate -ice ICE105 "Aircast-Receiver-$env:VERSION-x64.msi"
+          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Quoise-$env:VERSION-x64.msi"
+          wix msi validate -ice ICE105 "Quoise-$env:VERSION-x64.msi"
           # A harvest that finds nothing is a warning, not an error, and produces
           # a 35 KB installer that installs a program which cannot start. The
           # bundle is ~350 MB; anything under 100 MB means harvesting broke.
-          $msi = Get-Item "Aircast-Receiver-$env:VERSION-x64.msi"
+          $msi = Get-Item "Quoise-$env:VERSION-x64.msi"
           "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
           if ($msi.Length -lt 100MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
 
@@ -92,7 +92,7 @@ jobs:
         # The one check that looks at what a user ends up with rather than at
         # what we staged. See ci.yml.
         run: |
-          $msi = (Get-Item "Aircast-Receiver-$env:VERSION-x64.msi").FullName
+          $msi = (Get-Item "Quoise-$env:VERSION-x64.msi").FullName
           $dir = Join-Path $PWD "extracted"
           $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$msi`"", '/qn', "TARGETDIR=`"$dir`""
           if ($p.ExitCode -ne 0) { throw "administrative install failed with $($p.ExitCode)" }
@@ -114,7 +114,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: msi
-          path: Aircast-Receiver-*-x64.msi
+          path: Quoise-*-x64.msi
           if-no-files-found: error
 
   apk:
@@ -177,7 +177,7 @@ jobs:
             ls -l build/app/outputs/apk/release/ >&2
             exit 1
           }
-          mv "$APK" "$GITHUB_WORKSPACE/Aircast-Sender-$VERSION-unsigned.apk"
+          mv "$APK" "$GITHUB_WORKSPACE/Quoise-$VERSION-unsigned.apk"
 
       - name: Not an empty box
         # The MSI job's size check, for an APK. This is the first build in which
@@ -185,7 +185,7 @@ jobs:
         # the Dart snapshot still zips up fine, still installs, and shows
         # nothing. libapp.so exists only in an AOT build.
         run: |
-          APK="Aircast-Sender-$VERSION-unsigned.apk"
+          APK="Quoise-$VERSION-unsigned.apk"
           ls -l "$APK"
           for so in libapp.so libflutter.so; do
             unzip -l "$APK" | grep -q "lib/arm64-v8a/$so" || { echo "APK contains no $so"; exit 1; }
@@ -194,7 +194,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: apk
-          path: Aircast-Sender-*-unsigned.apk
+          path: Quoise-*-unsigned.apk
           if-no-files-found: error
 
   attest:
@@ -220,8 +220,8 @@ jobs:
           # user installs: signing changes the digest, and it happens on a
           # machine Actions cannot reach.
           subject-path: |
-            Aircast-Receiver-*-x64.msi
-            Aircast-Sender-*-unsigned.apk
+            Quoise-*-x64.msi
+            Quoise-*-unsigned.apk
 
   draft:
     name: Draft release
@@ -245,7 +245,7 @@ jobs:
           Any asset here whose name ends `-unsigned.apk` cannot be installed:
           Android refuses an unsigned package. It is the input to the
           maintainer's offline signing step, and the signed
-          `Aircast-Sender-<version>.apk` replaces it before this release is
+          `Quoise-<version>.apk` replaces it before this release is
           published.
 
           This bundle redistributes GLib, GTK and GStreamer under the LGPL; the
@@ -261,5 +261,5 @@ jobs:
         # make the Actions token enough to ship an update notice, which is
         # exactly what the offline key exists to prevent.
         run: |
-          gh release create "$TAG" Aircast-Receiver-*-x64.msi Aircast-Sender-*-unsigned.apk \
+          gh release create "$TAG" Quoise-*-x64.msi Quoise-*-unsigned.apk \
             --repo "$GITHUB_REPOSITORY" --draft --verify-tag --notes-file notes.md

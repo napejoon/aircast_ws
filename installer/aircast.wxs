@@ -4,8 +4,8 @@
 
     wix extension add -g WixToolset.UI.wixext/5.0.2
     wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext \
-      -d Ver=$V -d Stage=dist/aircast -o Aircast-Receiver-$V-x64.msi
-    wix msi validate -ice ICE105 Aircast-Receiver-$V-x64.msi
+      -d Ver=$V -d Stage=dist/aircast -o Quoise-$V-x64.msi
+    wix msi validate -ice ICE105 Quoise-$V-x64.msi
 
   MSI rather than an NSIS .exe for one reason: <MajorUpgrade/> removes the
   previous version's exact file set. This bundle is several hundred GStreamer

@@ -99,7 +99,7 @@ jobs:
         working-directory: sender
         run: |
           flutter build apk --debug
-          mv build/app/outputs/flutter-apk/app-debug.apk Aircast-Sender-debug.apk
+          mv build/app/outputs/flutter-apk/app-debug.apk Quoise-debug.apk
       - name: The release path release.yml depends on
         # Built and thrown away. This is where R8, resource shrinking and the
         # AOT compiler run, and where AGP's -unsigned rename — the gate that
@@ -117,7 +117,7 @@ jobs:
         if: github.event_name == 'push'
         with:
           name: aircast-sender-debug-apk
-          path: sender/Aircast-Sender-debug.apk
+          path: sender/Quoise-debug.apk
           if-no-files-found: error
 
   paintablesink:
@@ -244,15 +244,15 @@ jobs:
           # The dialogs are an extension, not part of the toolset, and its
           # version has to track wix's own or the build refuses to load it.
           wix extension add -g WixToolset.UI.wixext/5.0.2
-          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Aircast-Receiver-$env:VERSION-x64.msi"
+          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Quoise-$env:VERSION-x64.msi"
           # wix build runs no ICEs of its own. ICE105 is the dual-purpose-package
           # gate, and whether <Files> harvesting passes it is unsourced — so it
           # is a CI step rather than an assumption.
-          wix msi validate -ice ICE105 "Aircast-Receiver-$env:VERSION-x64.msi"
+          wix msi validate -ice ICE105 "Quoise-$env:VERSION-x64.msi"
           # A harvest that finds nothing is a warning, not an error, and produces
           # a 35 KB installer that installs a program which cannot start. The
           # bundle is ~350 MB; anything under 100 MB means harvesting broke.
-          $msi = Get-Item "Aircast-Receiver-$env:VERSION-x64.msi"
+          $msi = Get-Item "Quoise-$env:VERSION-x64.msi"
           "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
           if ($msi.Length -lt 100MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
 
@@ -265,7 +265,7 @@ jobs:
         # always right. An administrative install extracts the real layout
         # without installing anything or needing elevation.
         run: |
-          $msi = (Get-Item "Aircast-Receiver-$env:VERSION-x64.msi").FullName
+          $msi = (Get-Item "Quoise-$env:VERSION-x64.msi").FullName
           $dir = Join-Path $PWD "extracted"
           $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$msi`"", '/qn', "TARGETDIR=`"$dir`""
           if ($p.ExitCode -ne 0) { throw "administrative install failed with $($p.ExitCode)" }
@@ -289,4 +289,4 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: aircast-receiver-msi
-          path: Aircast-Receiver-*-x64.msi
+          path: Quoise-*-x64.msi

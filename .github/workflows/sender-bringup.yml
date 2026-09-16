@@ -60,10 +60,10 @@ jobs:
           flutter build apk --debug \
             --dart-define=AIRCAST_SIGNAL="$SIGNAL" \
             --dart-define=AIRCAST_RELAY="$RELAY"
-          mv build/app/outputs/flutter-apk/app-debug.apk Aircast-Sender-bringup.apk
+          mv build/app/outputs/flutter-apk/app-debug.apk Quoise-bringup.apk
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: aircast-sender-bringup-apk
-          path: sender/Aircast-Sender-bringup.apk
+          path: sender/Quoise-bringup.apk
           if-no-files-found: error
