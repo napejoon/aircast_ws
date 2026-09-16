@@ -10,7 +10,7 @@ mints TURN REST credentials — nothing else, per
 ```bash
 pip install -r requirements.txt
 AIRCAST_TURN_SECRET=dev AIRCAST_TURN_URLS=turn:127.0.0.1:3478 python aircast_signal.py
-pytest --asyncio-mode=auto        # 7 tests, no network needed
+pytest                            # 15 tests, no network needed
 ```
 
 ## Deploy

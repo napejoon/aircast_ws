@@ -101,9 +101,14 @@ pip install -r tools/requirements.txt
 python tools/fake_sender.py --signal ws://127.0.0.1:8443 --code 123456
 ```
 
-`pytest tools server --asyncio-mode=auto` runs the whole suite, including one
-test where two real peers pair through the real server and decoded video is
-asserted to move.
+`./run-tests.sh` runs everything CI runs, in CI's order and with CI's flags: the
+Python suite, then the receiver built `-Wall -Werror` and its `--selftest`, then
+`flutter test`. A toolchain this machine lacks is a `SKIP` line on stderr, not a
+failure, so the run always says what it did not check.
+
+`pytest` alone is the Python half -- `pytest.ini` carries the asyncio mode and the
+test roots -- and it includes the one test where two real peers pair through the
+real server and decoded video is asserted to move.
 
 ## State
 
@@ -111,7 +116,7 @@ Everything is written. Almost none of it has met real hardware.
 
 | | Built | Run |
 |---|---|---|
-| `server/`, `tools/` | — | yes, locally and in CI (11 tests) |
+| `server/`, `tools/` | — | yes, locally and in CI (16 tests) |
 | `receiver/` | CI, `-Wall -Werror` | **never** |
 | `gtk4paintablesink` | CI, from pinned sources | loads in CI; never rendered a frame |
 | `sender/` Android | CI, debug APK; unsigned release APK on a tag | **never on a device** |
