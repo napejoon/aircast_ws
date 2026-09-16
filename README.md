@@ -149,13 +149,14 @@ have been done on Windows; what each one cost is in the commits it produced.
    MediaProjection consent, the foreground service, flutter_webrtc at runtime and
    libwebrtc talking to `webrtcbin` all landed here, and so did the aspect and
    orientation work that followed from a screen whose shape is not the notebook's.
-4. ~~**The record button**, mid-session.~~ Done. The 700 ms muxer guess is still a
-   guess — it carries a `ponytail:` comment at `receiver/main.c` and is the one
-   known shortcut left in that path.
+4. ~~**The record button**, mid-session.~~ Done, and the 700 ms guess at how long
+   the muxer needs is gone: the branch comes out when its own EOS arrives,
+   forwarded out of the bin by `message-forward`. The timer that remains is a
+   five-second deadline rather than the plan.
 5. ~~**The USB path.** `adb forward`, then `gst-launch`.~~ Done, including the
    second cast in one run, which is where the parked `accept()` thread and the
-   once-only SPS/PPS turned up. Still outstanding inside it: the USB path does
-   not follow rotation.
+   once-only SPS/PPS turned up. Rotation is followed now, by resizing the one
+   VirtualDisplay rather than asking the projection for a second one.
 6. ~~**Then buy the VPS**~~ Done — `docs/ops/provision-vps.md` describes the
    server that exists. TURNS shares 443 with the websites on that box, which is
    the only reason the tablet works on a university network.

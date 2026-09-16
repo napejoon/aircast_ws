@@ -20,10 +20,13 @@ import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.Display
 import android.view.Surface
 import android.view.WindowManager
 import java.io.OutputStream
@@ -40,8 +43,25 @@ import kotlin.concurrent.thread
 class UsbCastService : Service() {
 
     private var projection: MediaProjection? = null
+
+    /** Swapped by the serve thread on rotation and read there; see [rotate]. */
+    @Volatile
     private var codec: MediaCodec? = null
     private var virtualDisplay: VirtualDisplay? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+    private var bitrate = 6_000_000
+
+    /**
+     * What the running encoder was configured for. onDisplayChanged fires for
+     * brightness and refresh rate too, so the size is what decides whether a
+     * change is a rotation.
+     */
+    private var encodedWidth = 0
+    private var encodedHeight = 0
+
+    /** Set on the main thread by the display listener, acted on in [pump]. */
+    @Volatile
+    private var rotationPending = false
     private var wakeLock: PowerManager.WakeLock? = null
 
     // Written on the serve thread and read on the main thread in stopCasting.
@@ -159,9 +179,38 @@ class UsbCastService : Service() {
         // Encoder dimensions must be even; odd screen widths exist.
         val width = metrics.widthPixels and 1.inv()
         val height = metrics.heightPixels and 1.inv()
-        val bitrate = intent.getIntExtra(EXTRA_BITRATE, 6_000_000)
+        bitrate = intent.getIntExtra(EXTRA_BITRATE, 6_000_000)
         socketName = intent.getStringExtra(EXTRA_SOCKET_NAME) ?: "aircast"
 
+        val (codec, surface) = newEncoder(width, height)
+        this.codec = codec
+        encodedWidth = width
+        encodedHeight = height
+
+        virtualDisplay = projection.createVirtualDisplay(
+            "aircast-usb",
+            width,
+            height,
+            metrics.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            surface,
+            null,
+            null,
+        )
+
+        watchRotation()
+        rotationPending = false
+        running = true
+        thread(name = "aircast-usb") { serve() }
+    }
+
+    /**
+     * A started encoder for a screen this size, and the surface a VirtualDisplay
+     * draws into. Separate from [start] because rotation builds a second one:
+     * MediaCodec cannot be reconfigured while it runs, and its input surface
+     * carries the size it was created with.
+     */
+    private fun newEncoder(width: Int, height: Int): Pair<MediaCodec, Surface> {
         val format =
             MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(
@@ -200,21 +249,73 @@ class UsbCastService : Service() {
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface: Surface = codec.createInputSurface()
         codec.start()
-        this.codec = codec
+        return codec to surface
+    }
 
-        virtualDisplay = projection.createVirtualDisplay(
-            "aircast-usb",
-            width,
-            height,
-            metrics.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            surface,
-            null,
-            null,
-        )
+    /**
+     * The screen turning under a cast that is already running.
+     *
+     * Two earlier attempts at this were dropped because both built a second
+     * VirtualDisplay, and MEDIA_PROJECTION_PREVENTS_REUSING_CONSENT forbids a
+     * second createVirtualDisplay on one projection from targetSdk 34 -- this
+     * app pins 36, and the SecurityException unwinds past every catch in pump()
+     * and ends the cast. VirtualDisplay.resize and VirtualDisplay.setSurface are
+     * the way round it: they change the display this projection already owns
+     * rather than asking for another one, and neither re-opens consent.
+     *
+     * The flag is only ever acted on from the serve thread, so there is exactly
+     * one thread building, swapping and releasing encoders.
+     */
+    private fun watchRotation() {
+        if (displayListener != null) return
+        val displays = getSystemService(DisplayManager::class.java)
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId == Display.DEFAULT_DISPLAY) rotationPending = true
+            }
+        }
+        displays.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+        displayListener = listener
+    }
 
-        running = true
-        thread(name = "aircast-usb") { serve() }
+    /**
+     * Rebuilds the encoder for the screen's new shape and returns the one to go
+     * on reading, or null if the cast cannot continue.
+     *
+     * Order matters: the display is pointed at the new surface before the old
+     * encoder is released, because releasing an encoder whose input surface a
+     * display is still drawing into takes the surface out from under the
+     * compositor.
+     */
+    private fun rotate(): MediaCodec? {
+        val display = virtualDisplay ?: return null
+        val old = codec ?: return null
+        val metrics = displayMetrics()
+        val width = metrics.widthPixels and 1.inv()
+        val height = metrics.heightPixels and 1.inv()
+        // onDisplayChanged also fires for brightness and refresh rate.
+        if (width == encodedWidth && height == encodedHeight) return old
+
+        val next = try {
+            newEncoder(width, height)
+        } catch (e: Exception) {
+            Log.e(TAG, "no encoder for " + width + "x" + height + ", ending the cast", e)
+            return null
+        }
+        // The kept header describes the old size, and a desktop connecting in the
+        // next millisecond must not be told the picture is that shape. The new
+        // encoder emits its own codec-config buffer as its first output.
+        codecConfig = null
+        display.resize(width, height, metrics.densityDpi)
+        display.setSurface(next.second)
+        codec = next.first
+        encodedWidth = width
+        encodedHeight = height
+        old.runCatching { stop() }
+        old.release()
+        return next.first
     }
 
     /**
@@ -223,7 +324,7 @@ class UsbCastService : Service() {
      * parameters, so there is one name in play and stopCasting can reach it.
      */
     private fun serve() {
-        val codec = this.codec ?: return
+        if (this.codec == null) return
         var mine: LocalServerSocket? = null
         try {
             val server = LocalServerSocket(socketName)
@@ -231,7 +332,7 @@ class UsbCastService : Service() {
             serverSocket = server
             server.use {
                 while (running) {
-                    it.accept().use { client -> pump(client, codec) }
+                    it.accept().use { client -> pump(client) }
                 }
             }
         } catch (e: Exception) {
@@ -260,7 +361,15 @@ class UsbCastService : Service() {
         }
     }
 
-    private fun pump(client: LocalSocket, codec: MediaCodec) {
+    private fun pump(client: LocalSocket) {
+        // A screen that turned while nobody was connected, so that the header
+        // written below describes what this desktop is about to receive rather
+        // than the shape before the turn.
+        if (rotationPending) {
+            rotationPending = false
+            rotate()
+        }
+        var codec = this.codec ?: return
         val out: OutputStream = client.outputStream
         val info = MediaCodec.BufferInfo()
         // MediaCodec hands out the SPS and PPS exactly once, in the
@@ -302,6 +411,11 @@ class UsbCastService : Service() {
         // MediaCodec warns that holding buffers stalls the codec, so every
         // buffer is written and released in the same iteration.
         while (running) {
+            if (rotationPending) {
+                rotationPending = false
+                codec = rotate() ?: return
+                continue
+            }
             val index = codec.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US)
             if (index < 0) continue
             try {
@@ -428,6 +542,11 @@ class UsbCastService : Service() {
 
     private fun stopCasting() {
         running = false
+        displayListener?.let {
+            runCatching { getSystemService(DisplayManager::class.java).unregisterDisplayListener(it) }
+        }
+        displayListener = null
+        rotationPending = false
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null
         runCatching { serverSocket?.close() }
@@ -453,6 +572,8 @@ class UsbCastService : Service() {
         // describe a picture it is not about to receive.
         codecConfig = null
         projection = null
+        encodedWidth = 0
+        encodedHeight = 0
     }
 
     /**

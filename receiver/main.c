@@ -407,10 +407,14 @@ unlink_record_branch (GstPad *pad, GstPadProbeInfo *info, gpointer data)
   gst_pad_send_event (sink, gst_event_new_eos ());
   gst_object_unref (sink);
 
-  /* ponytail: fixed 700 ms for the muxer to finish instead of waiting for the
-   * branch's own EOS message. Swap in a bus watch on the branch if a long
-   * recording ever comes out truncated. */
-  self->record_drop_timer = g_timeout_add (700, drop_record_branch, self);
+  /* The branch is pulled out when its EOS comes back through on_bus_message,
+   * which is when the file is actually closed. This is the deadline for that,
+   * not the plan: a muxer that never answers would otherwise leave the branch
+   * in the pipeline and the button stuck. Five seconds because the old fixed
+   * 700 ms was a guess at how long a long recording needs to write its index,
+   * and being wrong in this direction now costs a wait rather than a truncated
+   * file. */
+  self->record_drop_timer = g_timeout_add (5000, drop_record_branch, self);
   return GST_PAD_PROBE_REMOVE;
 }
 
@@ -798,6 +802,30 @@ on_bus_message (GstBus *bus, GstMessage *msg, gpointer data)
     g_free (debug);
     g_error_free (err);
   }
+
+  /* The record branch finishing, forwarded out of the bin by message-forward.
+   *
+   * record_drop_timer is the gate rather than the message source: it is armed
+   * only between sending the branch its EOS and tearing it out, and the branch
+   * is the only sub-bin in this pipeline that ever goes EOS while the session
+   * runs. Inside that window this message can mean nothing else.
+   *
+   * Same thread as the timer it replaces: gst_bus_add_watch dispatches on the
+   * default main context, so drop_record_branch still touches GTK from the
+   * main thread. */
+  if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_ELEMENT && self->record_drop_timer) {
+    const GstStructure *s = gst_message_get_structure (msg);
+    GstMessage *forwarded = NULL;
+    if (s && gst_structure_has_name (s, "GstBinForwarded")
+        && gst_structure_get (s, "message", GST_TYPE_MESSAGE, &forwarded, NULL)) {
+      gboolean eos = GST_MESSAGE_TYPE (forwarded) == GST_MESSAGE_EOS;
+      gst_message_unref (forwarded);
+      if (eos) {
+        g_source_remove (self->record_drop_timer);
+        drop_record_branch (self);
+      }
+    }
+  }
   return G_SOURCE_CONTINUE;
 }
 
@@ -909,6 +937,14 @@ build_pipeline (App *self, JsonObject *turn)
   }
 
   self->pipeline = gst_pipeline_new ("aircast-receiver");
+  /* A sink inside a bin does not post EOS to the pipeline bus: a pipeline
+   * posts one EOS, and only once every sink it holds has seen it. The record
+   * branch is a bin with a filesink in it, and its EOS is the one moment worth
+   * knowing about -- it is when matroskamux has written its index and closed
+   * the file. message-forward wraps that child message in a GstBinForwarded
+   * element message, which is the documented way to watch a sub-bin finish
+   * while the rest of the pipeline goes on playing. */
+  g_object_set (self->pipeline, "message-forward", TRUE, NULL);
   GstBus *bus = gst_element_get_bus (self->pipeline);
   gst_bus_add_watch (bus, on_bus_message, self);
   gst_object_unref (bus);
