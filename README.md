@@ -112,44 +112,52 @@ real server and decoded video is asserted to move.
 
 ## State
 
-Everything is written. Almost none of it has met real hardware.
+Every step of the bring-up order below has been walked except the last two, and
+the git log is the record of it: a tablet at 2304x1440 mirroring to a notebook
+at 1920x1080, Netflix against the 6 Mbit ceiling, a relay on a university
+network that drops everything but 443, and a Windows crash dump reading
+c0000374. What is left is the Ubuntu receiver and iOS.
 
 | | Built | Run |
 |---|---|---|
 | `server/`, `tools/` | — | yes, locally and in CI (16 tests) |
-| `receiver/` | CI, `-Wall -Werror` | **never** |
-| `gtk4paintablesink` | CI, from pinned sources | loads in CI; never rendered a frame |
-| `sender/` Android | CI, debug APK; unsigned release APK on a tag | **never on a device** |
+| `receiver/` Windows | CI, `-Wall -Werror`, MSI | yes, on real casts |
+| `receiver/` Ubuntu | CI, `-Wall -Werror` | **never** |
+| `gtk4paintablesink` | CI, from pinned sources | yes, on Windows |
+| `sender/` Android | CI, debug APK; unsigned release APK on a tag | yes, on a tablet |
 | `sender/` iOS | not built anywhere | **never** |
-| USB path | compiles inside the APK | **never carried a frame** |
+| USB path | compiles inside the APK | yes, including a second cast in one run |
+| TURN relay | — | yes, on the deployed VPS |
 
 The end-to-end test proves the protocol, not the product: both peers in it are
-aiortc, so no GStreamer and no libwebrtc were in that loop.
+aiortc, so no GStreamer and no libwebrtc were in that loop. Everything above it
+in this table was proven the other way, by casting and reading the log.
 
 ## Bring-up order
 
-Each step exists to fail on its own, rather than three at once:
+Each step exists to fail on its own, rather than three at once. Steps 1 to 6
+have been done on Windows; what each one cost is in the commits it produced.
 
-1. **Build the receiver on a real Linux box**, `gtk4paintablesink` included. CI
-   does this, so the first surprise here is a local-environment surprise.
-2. **`tools/fake_sender.py` into that receiver.** First time GStreamer decodes
-   anything. No phone, no TURN, no Android.
-3. **A real Android phone on the same LAN.** No TURN server needed: ICE
-   finds the direct pair. Proves
-   four things at once, which is why it comes after step 2: MediaProjection
-   consent, the foreground service, flutter_webrtc 1.6 at runtime, and
-   libwebrtc talking to `webrtcbin`.
-4. **The record button**, mid-session. The riskiest logic in the receiver: a
-   `tee` branch grafted on and cut off while the pipeline plays, with a
-   700 ms guess for how long the muxer needs to close the file. Check the
-   `.mkv` opens and the tail is not truncated.
-5. **The USB path.** `adb forward`, then `gst-launch`. Independent of everything
-   above — if the network path is stuck, this one can still be made to work.
-6. **Then buy the VPS**, follow `docs/ops/provision-vps.md`, and repeat step 3
-   with the two devices on different networks, where the direct pair fails and
-   the relay is the only thing left. Buying it earlier only adds a relay to
-   whatever is already broken.
-7. **iOS last**, because it needs a Mac, an Apple Developer account and a manual
-   Xcode step (`sender/ios/README.md`) — and because Apple has deprecated every
-   ReplayKit capture entry point as of iOS 27, so it is the part with a known
-   expiry date.
+1. ~~**Build the receiver on a real Linux box**, `gtk4paintablesink` included.~~
+   Done on Windows instead, through MSYS2 UCRT64 and the MSI — `receiver/README.md`
+   §Windows. A real Linux box is still the one platform this has never run on,
+   so step 1 is the outstanding one, not a finished one.
+2. ~~**`tools/fake_sender.py` into that receiver.**~~ Done.
+3. ~~**A real Android phone on the same LAN.**~~ Done, on a 2304x1440 tablet.
+   MediaProjection consent, the foreground service, flutter_webrtc at runtime and
+   libwebrtc talking to `webrtcbin` all landed here, and so did the aspect and
+   orientation work that followed from a screen whose shape is not the notebook's.
+4. ~~**The record button**, mid-session.~~ Done. The 700 ms muxer guess is still a
+   guess — it carries a `ponytail:` comment at `receiver/main.c` and is the one
+   known shortcut left in that path.
+5. ~~**The USB path.** `adb forward`, then `gst-launch`.~~ Done, including the
+   second cast in one run, which is where the parked `accept()` thread and the
+   once-only SPS/PPS turned up. Still outstanding inside it: the USB path does
+   not follow rotation.
+6. ~~**Then buy the VPS**~~ Done — `docs/ops/provision-vps.md` describes the
+   server that exists. TURNS shares 443 with the websites on that box, which is
+   the only reason the tablet works on a university network.
+7. **iOS**, still last and still untouched: it needs a Mac, an Apple Developer
+   account and a manual Xcode step (`sender/ios/README.md`) — and Apple has
+   deprecated every ReplayKit capture entry point as of iOS 27, so it is the part
+   with a known expiry date.
