@@ -455,22 +455,38 @@ class CastSession {
       // MAINTAIN_RESOLUTION a screencast source is supposed to inherit is only
       // reached while nobody names a preference at all.
       //
-      // Naming MAINTAIN_FRAMERATE changes no behaviour at this frame size, and
-      // that is the honest reason for it rather than any latency claim.
-      // 2304x1440 is 3,317,760 pixels and BALANCED only starts shedding frames
-      // below 640x480: its down-step asks MinFps first, which has no config
-      // above 640x480 and returns int max, so CanDecreaseFrameRateTo is false
-      // and the case falls through into MAINTAIN_FRAMERATE's DecreaseResolution
-      // anyway. Five 3/5 steps separate us from the size where the two differ.
-      // What this line buys is that the preference is ours and stays ours if
-      // the resolution ever drops. If we ever cast to read text while the
-      // tablet is busy, MAINTAIN_RESOLUTION is the one identifier to change.
+      // MAINTAIN_RESOLUTION, and this line used to say MAINTAIN_FRAMERATE with
+      // a note that the two behave the same at 2304x1440 and that this was the
+      // identifier to change "if we ever cast to read text while the tablet is
+      // busy". That is the whole use of this program, and the day came.
+      //
+      // Both of the others answer a squeeze by taking pixels: BALANCED's
+      // down-step asks MinFps first, which has no configured value above
+      // 640x480 and returns int max, so CanDecreaseFrameRateTo is false and it
+      // falls through into MAINTAIN_FRAMERATE's DecreaseResolution. Only
+      // MAINTAIN_RESOLUTION keeps the size, because the QualityScaler that
+      // drives those drops is not built at all under it.
+      //
+      // The squeeze that matters is not the link. Measured on a direct pair on
+      // one Wi-Fi, LOSS 0.00%, 12 Mbit/s available: moving the tablet's screen
+      // is enough to send QP past its high threshold of 37, and the scaler
+      // walks the encoder down 2304x1440 -> 1536x960 -> 1024x640 -> 768x480.
+      // The receiver paints what it is sent at 1:1 (receiver/main.c
+      // build_live_page), so the user watched the mirror physically shrink as
+      // they used the tablet, and shrink further the more they moved -- which
+      // is the opposite of what a mirror is for. Sharpness is the thing a
+      // screen mirror cannot trade away: a document at 2304x1440 and 24 fps is
+      // readable, and the same document at 768x480 and 60 is not.
+      //
+      // What it costs is frame rate under load, which is the trade we want and
+      // the one _adaptFrameRate already makes deliberately when the link is
+      // genuinely narrow.
       //
       // Never MAINTAIN_FRAMERATE_AND_RESOLUTION: webrtc_interface defines it
       // but libwebrtc's Java enum has no such constant, and the JNI answers an
       // unknown name with a check that aborts the process rather than throwing
       // something Dart can catch.
-      params.degradationPreference = RTCDegradationPreference.MAINTAIN_FRAMERATE;
+      params.degradationPreference = RTCDegradationPreference.MAINTAIN_RESOLUTION;
       await sender.setParameters(params);
     }
   }
