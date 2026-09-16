@@ -10,6 +10,9 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_webrtc: ^1.6.0
+  # The pairing QR the receiver draws. MLKit on Android, which is where the
+  # only sender that exists runs.
+  mobile_scanner: ^7.0.0
   web_socket_channel: ^3.0.1
 
 dev_dependencies:

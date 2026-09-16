@@ -6,6 +6,8 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'session.dart';
 import 'signaling.dart';
+import 'pairing.dart';
+import 'scan.dart';
 import 'usb.dart';
 
 /// The deployed server is compiled in, as it is in the receiver
@@ -206,6 +208,25 @@ class _SenderPageState extends State<SenderPage> {
     }
   }
 
+  /// Fills the two fields a pairing QR carries and stops there.
+  ///
+  /// Deliberately not a cast. The server address decides where this
+  /// screen is sent, and a QR is printed by whoever printed it: scanning
+  /// one and mirroring immediately would put a screen on a stranger's
+  /// relay before its owner had read the host it was going to. The status
+  /// line names that host, and Start stays where it was.
+  Future<void> _scan() async {
+    final payload = await Navigator.of(context).push<PairingPayload>(
+      MaterialPageRoute(builder: (_) => const ScanPage()),
+    );
+    if (payload == null || !mounted) return;
+    setState(() {
+      _code.text = payload.code;
+      _url.text = payload.url;
+      _status = 'Scanned ${Uri.parse(payload.url).host} — press Start to mirror';
+    });
+  }
+
   Future<void> _castOverUsb() async {
     try {
       await UsbCast.start();
@@ -322,6 +343,13 @@ class _SenderPageState extends State<SenderPage> {
                     foreground: _room,
                   ),
                   if (Platform.isAndroid) ...[
+                    const SizedBox(height: 10),
+                    _PillButton(
+                      label: 'Scan the code on the desktop',
+                      onPressed: _busy ? null : _scan,
+                      background: _card,
+                      foreground: _ink,
+                    ),
                     const SizedBox(height: 10),
                     _PillButton(
                       label: 'Mirror over USB cable',
