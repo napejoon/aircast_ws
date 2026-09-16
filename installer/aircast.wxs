@@ -22,7 +22,7 @@
   Stage is made absolute here rather than required absolute from the caller,
   because a relative Files/@Include is not resolved against the working
   directory: it is appended to the source path of the Directory it sits in, so
-  -d Stage=dist/aircast was searched for under "Aircast Receiver\dist\aircast",
+  -d Stage=dist/aircast was searched for under "Quoise\dist\aircast",
   found nothing, and shipped a 65 KB installer holding one executable. A harvest
   root that does not exist is warning WIX8601, not an error. Swapping -b for -d
   changed nothing — both values were relative. The MSI size floor in CI is what
@@ -52,14 +52,14 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <?define StageRoot=$(sys.CURRENTDIR)$(var.Stage)?>
 
-  <Package Name="Aircast Receiver"
+  <Package Name="Quoise"
            Manufacturer="napejoon"
            Version="$(var.Ver)"
            UpgradeCode="027C7C65-2D1E-488A-A147-552B9D981628"
            Scope="perMachine">
 
     <!-- AllowSameVersionUpgrades, because the default bound is what left two
-         "Aircast Receiver" rows in Apps and Features. Left to itself WiX writes
+         "Quoise" rows in Apps and Features. Left to itself WiX writes
          the detect-and-remove row as "older than ProductVersion, maximum
          excluded", and every build that is not a tag stamps 0.0.0: 0.0.0 is not
          older than 0.0.0, so FindRelatedProducts matched nothing, nothing was
@@ -94,11 +94,11 @@
     <WixVariable Id="WixUILicenseRtf" Value="$(sys.CURRENTDIR)installer\license.rtf" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="Aircast Receiver">
+      <Directory Id="INSTALLFOLDER" Name="Quoise">
         <Directory Id="BinFolder" Name="bin">
           <Component>
             <File Id="AircastExe" Source="$(var.StageRoot)\bin\aircast-receiver.exe" />
-            <Shortcut Directory="ShortcutFolder" Name="Aircast Receiver"
+            <Shortcut Directory="ShortcutFolder" Name="Quoise"
                       Target="[#AircastExe]" WorkingDirectory="BinFolder" />
             <RemoveFolder Id="CleanShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
           </Component>
@@ -114,7 +114,7 @@
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="ShortcutFolder" Name="Aircast" />
+      <Directory Id="ShortcutFolder" Name="Quoise" />
     </StandardDirectory>
   </Package>
 </Wix>
