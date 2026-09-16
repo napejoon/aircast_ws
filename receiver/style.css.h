@@ -182,3 +182,22 @@
 "  background: #1B1F26;"
 "  color: #c9d1dc;"
 "}"
+
+/* Fullscreen is the mirror and nothing else: the frame that makes this read as
+ * an object in a room is exactly what wastes a screen when the screen is all
+ * there is. */
+"window.immersive .bezel {"
+"  margin: 0;"
+"  padding: 0;"
+"  border-radius: 0;"
+"  border-width: 0;"
+"  box-shadow: none;"
+"}"
+
+"window.immersive .screen {"
+"  border-radius: 0;"
+"}"
+
+"window.immersive .toolbar {"
+"  border-top-width: 0;"
+"}"

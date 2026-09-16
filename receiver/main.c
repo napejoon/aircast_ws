@@ -119,7 +119,10 @@ typedef struct {
   GtkWidget *strip_res;         /* what the encoder is sending, right now */
   GtkWidget *strip_loss;        /* packets lost, as a share of those sent */
   GtkWidget *toolbar;           /* below the video rather than floating over it */
+  GtkWidget *strip;             /* the whole bottom bar, hidden in fullscreen */
   GtkWidget *strip_readings;    /* the six cells, foldable as a group */
+  GtkWidget *fullscreen_button; /* its icon turns over with the state */
+  gboolean strip_was_shown;     /* folded state, remembered across fullscreen */
   GtkWidget *strip_toggle;      /* the chevron that folds them */
   guint stats_timer;            /* 1 Hz while a session is up, 0 otherwise */
   guint64 last_lost, last_recv; /* so loss reads per second, not per session */
@@ -465,6 +468,40 @@ on_fullscreen_clicked (GtkButton *button, App *self)
     gtk_window_unfullscreen (window);
   else
     gtk_window_fullscreen (window);
+}
+
+/* Fullscreen means the mirror and nothing else.
+ *
+ * gtk_window_fullscreen takes the title bar and the taskbar, and that used to
+ * be the whole of it: the toolbar, the readings and the bezel's own 32 px
+ * margin, 14 px padding and drop shadow went on eating the screen, so a
+ * "fullscreen" mirror was inset by about a hundred pixels on every side. The
+ * chrome is worth its space in a window and worth none of it here.
+ *
+ * Driven from notify::fullscreened rather than from the button, so it is right
+ * however the state changed -- the button, F, F11, Escape, or the window
+ * manager doing it on its own.
+ *
+ * The toolbar stays. Everything else can go because it is only information,
+ * but a fullscreen window with no visible way out is a trap, and Escape is not
+ * a thing every user tries. The strip's own folded state is remembered across
+ * the trip so D is not undone by a visit to fullscreen. */
+static void
+on_fullscreen_changed (GObject *window, GParamSpec *pspec, App *self)
+{
+  gboolean full = gtk_window_is_fullscreen (GTK_WINDOW (window));
+
+  if (full) {
+    self->strip_was_shown = gtk_widget_get_visible (self->strip);
+    gtk_widget_add_css_class (self->window, "immersive");
+  } else {
+    gtk_widget_remove_css_class (self->window, "immersive");
+  }
+  gtk_widget_set_visible (self->strip, full ? FALSE : self->strip_was_shown);
+  gtk_widget_set_tooltip_text (self->fullscreen_button,
+      full ? "Leave fullscreen (F or Escape)" : "Fullscreen (F)");
+  gtk_button_set_icon_name (GTK_BUTTON (self->fullscreen_button),
+      full ? "view-restore-symbolic" : "view-fullscreen-symbolic");
 }
 
 static void
@@ -2140,6 +2177,7 @@ build_toolbar (App *self)
   gtk_label_set_max_width_chars (GTK_LABEL (self->live_status), 40);
 
   GtkWidget *fullscreen = toolbar_button ("view-fullscreen-symbolic", "Fullscreen (F)");
+  self->fullscreen_button = fullscreen;
   g_signal_connect (fullscreen, "clicked", G_CALLBACK (on_fullscreen_clicked), self);
 
   GtkWidget *quit = toolbar_button ("window-close-symbolic", "Disconnect");
@@ -2218,9 +2256,13 @@ activate (GtkApplication *app, gpointer user_data)
   /* Hidden until there is something to operate. On the idle page every button
    * in it is either meaningless or destructive. */
   gtk_widget_set_visible (self->toolbar, FALSE);
+  self->strip = build_strip (self);
+  self->strip_was_shown = TRUE;
   gtk_box_append (GTK_BOX (column), self->stack);
   gtk_box_append (GTK_BOX (column), self->toolbar);
-  gtk_box_append (GTK_BOX (column), build_strip (self));
+  gtk_box_append (GTK_BOX (column), self->strip);
+  g_signal_connect (self->window, "notify::fullscreened",
+      G_CALLBACK (on_fullscreen_changed), self);
   gtk_window_set_child (GTK_WINDOW (self->window), column);
 
   GtkEventController *keys = gtk_event_controller_key_new ();
