@@ -116,7 +116,7 @@ jobs:
         # is one this repository did not write.
         if: github.event_name == 'push'
         with:
-          name: aircast-sender-debug-apk
+          name: quoise-debug-apk
           path: sender/Quoise-debug.apk
           if-no-files-found: error
 
@@ -288,5 +288,5 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: aircast-receiver-msi
+          name: quoise-msi
           path: Quoise-*-x64.msi
