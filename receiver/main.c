@@ -477,6 +477,14 @@ on_fullscreen_clicked (GtkButton *button, App *self)
   }
 }
 
+/* Deferred out of notify::fullscreened; see the call site for why. */
+static gboolean
+restore_maximized (gpointer window)
+{
+  gtk_window_maximize (GTK_WINDOW (window));
+  return G_SOURCE_REMOVE;
+}
+
 /* Fullscreen means the mirror and nothing else.
  *
  * gtk_window_fullscreen takes the title bar and the taskbar, and that used to
@@ -508,8 +516,16 @@ on_fullscreen_changed (GObject *window, GParamSpec *pspec, App *self)
   } else {
     gtk_widget_remove_css_class (self->window, "immersive");
     if (self->was_maximized) {
-      gtk_window_maximize (GTK_WINDOW (window));
       self->was_maximized = FALSE;
+      /* Not from here. This handler runs inside gtk_window_unfullscreen, and
+       * asking for another window state while GDK is still settling the last
+       * one made the win32 backend free the toplevel's layout twice: the
+       * process died with STATUS_HEAP_CORRUPTION, and the dump put the second
+       * free under gtk_window_unfullscreen itself. Before that it painted the
+       * fullscreen picture into a window that had already shrunk and answered
+       * nothing. The idle runs once the state change is complete. */
+      g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, restore_maximized,
+          g_object_ref (window), g_object_unref);
     }
   }
   gtk_widget_set_visible (self->strip, full ? FALSE : self->strip_was_shown);
