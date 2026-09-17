@@ -30,10 +30,41 @@ cp "$BUILD/aircast-receiver.exe" "$OUT/bin/"
 cp "$PREFIX/bin/gst-inspect-1.0.exe" "$OUT/bin/"
 cp "$PREFIX/libexec/gstreamer-1.0/gst-plugin-scanner.exe" "$OUT/libexec/gstreamer-1.0/"
 cp "$PREFIX"/lib/gio/modules/libgioopenssl.dll "$OUT/lib/gio/modules/"
-# ponytail: the whole plugin directory, not a curated list. Prune only if the
-# installer turns out too big — measure first, a wrong guess here is a codec
-# that works in CI and not on the user's machine.
-cp "$PREFIX"/lib/gstreamer-1.0/*.dll "$OUT/lib/gstreamer-1.0/"
+# A curated list, now that there is a measurement to justify one. The old
+# comment here said to prune only after measuring, because a wrong guess is a
+# codec that works in CI and not on the user's machine. The measurement arrived:
+# main.c marks its own startup, and on the reported machine gst_init took 21.28
+# of a 22.83 second launch. Everything else together -- the Direct3D probe,
+# gtk_init, building and presenting the window -- was 1.55.
+#
+# That time is the 299 plugin files: after an install every one has a new mtime,
+# so GStreamer rebuilds its registry and LoadLibrary's all of them, through a
+# Defender that has never seen any of them before. After a reboot the registry
+# is still valid but the files are cold and it stats all 299. The receiver names
+# fifteen elements and webrtcbin makes about as many again. The rest was aws,
+# deepgram, elevenlabs, spotify, decklink, ndi, x265, festival and two hundred
+# and fifty others that this program cannot reach.
+#
+# What keeps this honest is the check below, not this list.
+PLUGINS="
+  coreelements typefindfunctions app
+  webrtc nice dtls srtp sctp
+  rtp rtpmanager
+  videoparsersbad videoconvertscale matroska
+  libav vpx
+  d3d11
+  gtk4
+  opengl
+"
+for name in $PLUGINS; do
+  src="$PREFIX/lib/gstreamer-1.0/libgst$name.dll"
+  if [ -f "$src" ]; then
+    cp "$src" "$OUT/lib/gstreamer-1.0/"
+  else
+    echo "no plugin libgst$name.dll in $PREFIX" >&2
+    exit 1
+  fi
+done
 
 # ntldd -R prints three shapes per line:
 #   "\tNAME (0xADDR)"            a system DLL, no path — skip
@@ -66,6 +97,46 @@ closure () {
 } | sort -u | while read -r dll; do
   cp -n "$dll" "$OUT/bin/"
 done
+
+# Every element this program can ask for by name, and every element webrtcbin
+# builds inside itself. The pruning above is a list of files; this is the list
+# that matters, and it is checked against the bundle rather than against the
+# machine that built it -- GST_PLUGIN_SYSTEM_PATH_1_0 points at the tree we just
+# made and GST_PLUGIN_PATH_1_0 is emptied, so a plugin left behind fails here
+# and not on a user's desktop.
+#
+# The names come from receiver/main.c (its pipeline strings and its two
+# factory calls) and from webrtcbin's own internals: it makes an rtpbin, a pair
+# of nice elements, the DTLS-SRTP encoder and decoder, the jitter buffer,
+# retransmission and the demuxers under them.
+#
+# d3d11h264dec is deliberately not in it. The d3d11 plugin registers its
+# decoders per adapter, and a CI runner has no GPU, so the element does not
+# exist there however correctly the plugin is shipped -- the first run of
+# this check failed on exactly that and nothing else. main.c makes the same
+# allowance at runtime: it looks the factory up with
+# gst_element_factory_find and falls back to avdec_h264 when it is absent or
+# ranked none. What this script can check is that the plugin file is here,
+# and the loop above exits non-zero if it is not.
+ELEMENTS="
+  webrtcbin rtph264depay rtpvp8depay h264parse
+  tee queue identity capsfilter filesink fakesink funnel
+  videoconvert matroskamux avdec_h264 vp8dec gtk4paintablesink
+  rtpbin rtpjitterbuffer rtpssrcdemux rtpptdemux rtpstorage
+  rtprtxsend rtprtxreceive
+  nicesrc nicesink dtlssrtpenc dtlssrtpdec srtpenc srtpdec
+  sctpenc sctpdec
+"
+missing=
+for el in $ELEMENTS; do
+  GST_PLUGIN_SYSTEM_PATH_1_0="$OUT/lib/gstreamer-1.0" GST_PLUGIN_PATH_1_0= \
+    "$OUT/bin/gst-inspect-1.0.exe" "$el" >/dev/null 2>&1 || missing="$missing $el"
+done
+if [ -n "$missing" ]; then
+  echo "the bundle is missing these elements:$missing" >&2
+  exit 1
+fi
+echo "all $(echo $ELEMENTS | wc -w) named elements resolve inside the bundle"
 
 # The only mandatory data file: GTK reads settings through GSettings, and
 # g_settings_new() aborts the process when the schema is missing.
