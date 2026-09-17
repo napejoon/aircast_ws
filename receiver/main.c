@@ -2055,13 +2055,25 @@ draw_pairing_qr (GtkDrawingArea *area, cairo_t *cr, int width, int height,
   double ox = (width - side) / 2.0;
   double oy = (height - side) / 2.0;
 
-  cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
-  cairo_rectangle (cr, ox, oy, side, side);
+  /* #f7efe1, and rounded. A pure white square with hard corners was the
+   * brightest and squarest thing on a warm, round-cornered card, so it read as
+   * pasted on rather than printed -- and it out-shouted the six digits, which
+   * are what someone across the room is actually there to read. The radius is
+   * two modules, which stays inside the four-module quiet zone and so takes
+   * nothing a scanner needs. Against the ink below it this is still 16:1. */
+  const double r = module * 2.0;
+  cairo_new_sub_path (cr);
+  cairo_arc (cr, ox + side - r, oy + r,        r, -G_PI / 2, 0);
+  cairo_arc (cr, ox + side - r, oy + side - r, r, 0,         G_PI / 2);
+  cairo_arc (cr, ox + r,        oy + side - r, r, G_PI / 2,  G_PI);
+  cairo_arc (cr, ox + r,        oy + r,        r, G_PI,      3 * G_PI / 2);
+  cairo_close_path (cr);
+  cairo_set_source_rgb (cr, 0.969, 0.937, 0.882);
   cairo_fill (cr);
 
-  /* #0b1214, the window behind the card: the code reads as a hole cut in the
+  /* #06100f, the window behind the card: the code reads as a hole cut in the
    * screen rather than as ink printed on it. */
-  cairo_set_source_rgb (cr, 0.043, 0.071, 0.078);
+  cairo_set_source_rgb (cr, 0.024, 0.063, 0.059);
   for (int y = 0; y < qr->width; y++) {
     for (int x = 0; x < qr->width; x++) {
       if (qr->data[y * qr->width + x] & 1)
@@ -2158,17 +2170,29 @@ build_idle_page (App *self)
   gtk_label_set_selectable (GTK_LABEL (self->update_label), TRUE);
 
   gtk_box_append (GTK_BOX (box), self->status_label);
-  gtk_box_append (GTK_BOX (box), self->update_label);
+
+  /* Everything below the connection line is small print, and it used to be
+   * four labels of nearly one size stacked eight pixels apart: the card ended
+   * in a paragraph of grey that read as a program printing at the user. They
+   * live in a footnote now -- one hairline, real space above it -- and the
+   * update message sits on the same row as the button that acts on it rather
+   * than on the line above it. */
+  GtkWidget *footnote = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  gtk_widget_add_css_class (footnote, "footnote");
+  GtkWidget *update_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_widget_set_halign (update_row, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (update_row), self->update_label);
 
   /* Next to the label it writes to. It sat in the toolbar, which show_page
    * hides on this page -- so "click Update" pointed at nothing, and a press
    * during a cast reported to a page nobody could see. */
   GtkWidget *update = gtk_button_new_with_label ("Update");
   gtk_button_set_has_frame (GTK_BUTTON (update), FALSE);
-  gtk_widget_add_css_class (update, "hint");
+  gtk_widget_add_css_class (update, "link");
   gtk_widget_set_tooltip_text (update, "Check for a new version");
   g_signal_connect (update, "clicked", G_CALLBACK (on_update_clicked), self);
-  gtk_box_append (GTK_BOX (box), update);
+  gtk_box_append (GTK_BOX (update_row), update);
+  gtk_box_append (GTK_BOX (footnote), update_row);
 
 #ifdef G_OS_WIN32
   /* On the idle card and nowhere else: this is the screen someone stares at
@@ -2180,16 +2204,17 @@ build_idle_page (App *self)
   GtkWidget *wireless =
       gtk_button_new_with_label ("No app on the phone? Use Windows Wireless Display");
   gtk_button_set_has_frame (GTK_BUTTON (wireless), FALSE);
-  gtk_widget_add_css_class (wireless, "hint");
+  gtk_widget_add_css_class (wireless, "link");
   gtk_widget_set_tooltip_text (wireless,
       "Opens Settings > System > Projecting to this PC, where Windows' own "
       "Miracast receiver is installed and switched on. Adding it needs an "
       "administrator once. The picture is then Windows': aircast cannot record "
       "it or tune its latency.");
   g_signal_connect (wireless, "clicked", G_CALLBACK (on_wireless_display_clicked), self);
-  gtk_box_append (GTK_BOX (box), wireless);
+  gtk_box_append (GTK_BOX (footnote), wireless);
 #endif
 
+  gtk_box_append (GTK_BOX (box), footnote);
   return box;
 }
 

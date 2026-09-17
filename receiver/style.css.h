@@ -3,76 +3,147 @@
  * Kept as string literals rather than a .css file so the binary needs no data
  * files installed next to it — on Windows especially, "where is style.css"
  * is a worse problem than escaped newlines.
+ *
+ * Three colours and a ground, and each one has a job:
+ *
+ *   #3ddcd0  turquoise, the brand. The wordmark, the focus ring, the live
+ *            beacon, the halo under the QR plate. Identity and "this is
+ *            working", nothing else.
+ *   #ff6b5e  coral, which sits opposite turquoise on the wheel (175 against
+ *            5 degrees) and so is the one hue that cannot be mistaken for it
+ *            across a room. Recording, dropped, ended.
+ *   #f3e3c3  sand. Every line of supporting text used to be a cooler grey than
+ *            the one above it, and a card of nothing but cold greys reads as
+ *            unfinished rather than calm. Sand is warm, so it separates from
+ *            the ground by temperature as well as by lightness.
+ *
+ * The ground is #06100f rather than black: a pure black window behind a card
+ * that is nearly black gives the card no edge to be found by, and the gradient
+ * below gives the room a direction the flat fill never had.
  */
 
+/* The gradient runs bottom-up, lighter at the top, because the card sits in
+ * the upper middle of the window and needs the contrast where it is. */
 "window.room {"
-"  background: #0b1214;"
+"  background: linear-gradient(to top, #050c0b 0%, #06100f 45%, #0b1a1b 100%);"
 "}"
 
 /* ------------------------------------------------------------- idle card */
 
+/* It was #131b1d on #0b1214: three percent of lightness between the card and
+ * the room, which at a normal viewing distance is no edge at all, and the
+ * shadow was doing the whole job of saying an object was there. Now the fill
+ * is lifted, the border is a real hairline with some colour in it, and the
+ * inset highlight along the top edge is the one pixel that makes a flat
+ * rectangle read as a raised surface. */
 ".card {"
-"  padding: 40px 56px;"
-"  border-radius: 22px;"
-"  background: #131b1d;"
-"  border: 1px solid #1f2b2d;"
-"  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);"
+"  padding: 44px 60px 36px 60px;"
+"  border-radius: 28px;"
+"  background: linear-gradient(to bottom, #132523 0%, #0e1e1d 100%);"
+"  border: 1px solid #22403d;"
+"  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.05);"
 "}"
 
 ".title {"
-"  font-size: 15px;"
-"  font-weight: 600;"
-"  letter-spacing: 3px;"
+"  font-size: 13px;"
+"  font-weight: 700;"
+"  letter-spacing: 5px;"
 "  text-transform: uppercase;"
 /* The wordmark is the one place the brand colour belongs on a card whose job
  * is to be read across a room: the code below it stays the brightest thing
  * there, because a six-digit code someone is squinting at is not the place to
  * spend contrast on identity. */
 "  color: #3ddcd0;"
-"  margin-bottom: 18px;"
+"  margin-bottom: 4px;"
 "}"
 
+/* The instruction, and the only sentence on the card anyone has to read before
+ * they know what to do with it. Sand at full strength, one step under the
+ * code, well clear of the footnotes at the bottom. */
 ".hint {"
-"  font-size: 14px;"
-"  color: #96acad;"
+"  font-size: 15px;"
+"  color: #f3e3c3;"
+"  margin-bottom: 22px;"
 "}"
 
-/* The code is the one thing a user has to read across a room. */
+/* The code is the one thing a user has to read across a room, so it is the
+ * brightest and the largest thing on it, and warm white rather than the old
+ * blue-white — on a warm card a cold white reads as a different material. */
 ".code {"
-"  font-size: 64px;"
-"  font-weight: 700;"
-"  letter-spacing: 14px;"
+"  font-size: 72px;"
+"  font-weight: 800;"
+"  letter-spacing: 16px;"
 "  font-feature-settings: 'tnum' 1;"
-"  color: #eff7f7;"
-"  margin: 14px 0 8px 0;"
+"  color: #f7f3ea;"
+"  margin: 20px 0 6px 0;"
 /* Letter-spacing is applied after every character including the last, so the
- * label is 14 px wider on the right than the digits are, and a centred label
- * sits 7 px left of where it looks like it should. The padding puts the gap
+ * label is 16 px wider on the right than the digits are, and a centred label
+ * sits 8 px left of where it looks like it should. The padding puts the gap
  * back on the other side. */
-"  padding-left: 14px;"
+"  padding-left: 16px;"
 "}"
 
-/* The plate is drawn by the widget, so all this owns is the space around it. */
+/* The plate is drawn by the widget, so all this owns is the space around it
+ * and the halo under it. The halo is turquoise at a tenth: a white plate on a
+ * dark card had a hard cut-out edge that made it read as pasted on rather than
+ * lit, and this is the cheapest way to sit it in the same room as everything
+ * else. */
 ".qr {"
-"  margin: 14px 0 4px 0;"
+"  margin: 6px 0 4px 0;"
+"  box-shadow: 0 0 44px rgba(61, 220, 208, 0.10);"
 "}"
 
+/* Connection state, and the first of the small lines under the code. */
 ".status {"
 "  font-size: 12px;"
-"  color: #6d8384;"
+"  color: #7f9896;"
+"}"
+
+/* The four small grey lines under the code used to be four separate labels of
+ * nearly one size, stacked eight pixels apart, and the whole group read as a
+ * program printing at the user rather than as a card. The footnote is what
+ * they sit in now: a hairline, real space above it, and everything inside it
+ * one size smaller than the line that matters. */
+".footnote {"
+"  margin-top: 20px;"
+"  padding-top: 16px;"
+"  border-top: 1px solid #1c3532;"
+"}"
+
+/* The way out of this window, and the update check beside it: text that can be
+ * clicked, not buttons that look like they run the cast. Turquoise on hover
+ * only, so the resting card stays a card and not a page of links. */
+"button.link {"
+"  padding: 4px 8px;"
+"  border: none;"
+"  border-radius: 8px;"
+"  background: transparent;"
+"  font-size: 12px;"
+"  color: #7f9896;"
+"}"
+
+"button.link:hover {"
+"  background: rgba(61, 220, 208, 0.08);"
+"  color: #3ddcd0;"
+"}"
+
+"button.link:focus-visible {"
+"  outline: 2px solid #3ddcd0;"
+"  outline-offset: -2px;"
+"  color: #3ddcd0;"
 "}"
 
 /* ---------------------------------------------------------- mirrored screen */
 
-/* A phone-shaped frame: thick dark bezel, generous corner radius, and a soft"
- * drop shadow so the screen reads as an object in a room rather than a video"
+/* A phone-shaped frame: thick dark bezel, generous corner radius, and a soft
+ * drop shadow so the screen reads as an object in a room rather than a video
  * pinned to a wall. */
 ".bezel {"
 "  padding: 14px;"
 "  margin: 32px;"
 "  border-radius: 34px;"
 "  background: #04090a;"
-"  border: 1px solid #273334;"
+"  border: 1px solid #22403d;"
 "  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);"
 "}"
 
@@ -94,13 +165,13 @@
  * than as a card floating in it, so it has one hairline above it and no
  * radius, no shadow and no fill of its own beyond a shade off the room. */
 ".strip {"
-"  background: #0e1618;"
-"  border-top: 1px solid #1f2c2e;"
+"  background: #081412;"
+"  border-top: 1px solid #1c3532;"
 "}"
 
 ".cell {"
 "  padding: 8px 16px;"
-"  border-right: 1px solid #1f2c2e;"
+"  border-right: 1px solid #1c3532;"
 "}"
 
 /* The readings sit in their own box (build_strip), so this is the last of them
@@ -114,7 +185,7 @@
 "  font-size: 9px;"
 "  font-weight: 700;"
 "  letter-spacing: 2px;"
-"  color: #4A5F60;"
+"  color: #5a7371;"
 "}"
 
 /* Monospaced and tabular: these numbers change every second, and in a
@@ -123,12 +194,12 @@
 "  font-family: monospace;"
 "  font-size: 12px;"
 "  font-feature-settings: 'tnum' 1;"
-"  color: #eff7f7;"
+"  color: #f7f3ea;"
 "}"
 
 ".cell-state {"
 "  font-size: 12px;"
-"  color: #c7dadb;"
+"  color: #f3e3c3;"
 "}"
 
 /* A disc drawn by the box rather than by a glyph, so it does not depend on
@@ -138,24 +209,26 @@
 "  min-width: 8px;"
 "  min-height: 8px;"
 "  border-radius: 999px;"
-"  background: #4A5F60;"
+"  background: #4a5f60;"
 "}"
 
-/* The halo, not a bigger disc: the strip is 8 px of colour against #0e1618 and
- * the eye skips it. A ring at a sixth of the same colour is visible from the
- * far side of a desk and takes no room the row has to give up, because a
+/* The halo, not a bigger disc: the strip is 8 px of colour against the frame
+ * and the eye skips it. A ring at a sixth of the same colour is visible from
+ * the far side of a desk and takes no room the row has to give up, because a
  * box-shadow is drawn outside the layout. */
 ".beacon.live {"
 "  background: #3ddcd0;"
 "  box-shadow: 0 0 0 3px rgba(61, 220, 208, 0.16);"
 "}"
 
-/* Amber for the state between working and failed. A link that dropped and is
+/* Sand for the state between working and failed. A link that dropped and is
  * being retried is neither, and it had no colour of its own: it borrowed the
- * failure red and said the cast was over a second before it came back. */
+ * failure red and said the cast was over a second before it came back. Warm,
+ * so it is told apart from the turquoise beside it by hue and not only by
+ * lightness -- which is what a red-green colourblind viewer has. */
 ".beacon.warn {"
-"  background: #ffc857;"
-"  box-shadow: 0 0 0 3px rgba(255, 200, 87, 0.16);"
+"  background: #f3c36b;"
+"  box-shadow: 0 0 0 3px rgba(243, 195, 107, 0.16);"
 "}"
 
 ".beacon.bad {"
@@ -172,8 +245,8 @@
  * the window's frame now rather than an object sitting on the video. */
 ".toolbar {"
 "  padding: 6px 10px;"
-"  background: #0e1618;"
-"  border-top: 1px solid #1f2c2e;"
+"  background: #081412;"
+"  border-top: 1px solid #1c3532;"
 "}"
 
 "button.tool {"
@@ -183,11 +256,11 @@
 "  border-radius: 999px;"
 "  border: none;"
 "  background: transparent;"
-"  color: #c7dadb;"
+"  color: #f3e3c3;"
 "}"
 
 "button.tool:hover {"
-"  background: #212f30;"
+"  background: #16302d;"
 "  color: #ffffff;"
 "}"
 
@@ -195,21 +268,25 @@
  * The same fill as hover plus an outline, because the fill alone is the state
  * the pointer already uses and would not say which button holds focus. */
 "button.tool:focus-visible {"
-"  background: #212f30;"
+"  background: #16302d;"
 "  color: #ffffff;"
 "  outline: 2px solid #3ddcd0;"
 "  outline-offset: -2px;"
 "}"
 
-/* Recording is loud on purpose — a session recorded by accident is the one"
- * mistake this program can make that the user cannot undo. */
+/* Recording is loud on purpose — a session recorded by accident is the one
+ * mistake this program can make that the user cannot undo. Coral filled, with
+ * the ground's own colour for the glyph: a dark mark on a bright button is
+ * read at a glance as a state, where bright-on-dark is read as one more
+ * button. */
 "button.tool.recording {"
-"  background: #c0392b;"
-"  color: #ffffff;"
+"  background: #ff6b5e;"
+"  color: #06100f;"
 "}"
 
 "button.tool.recording:hover {"
-"  background: #d0453a;"
+"  background: #ff8578;"
+"  color: #06100f;"
 "}"
 
 ".rec-time {"
@@ -225,12 +302,12 @@
 "  min-width: 26px;"
 "  min-height: 26px;"
 "  margin: 0 6px;"
-"  color: #4A5F60;"
+"  color: #5a7371;"
 "}"
 
 "button.strip-toggle:hover {"
-"  background: #192426;"
-"  color: #c7dadb;"
+"  background: #16302d;"
+"  color: #f3e3c3;"
 "}"
 
 /* Fullscreen is the mirror and nothing else: the frame that makes this read as
