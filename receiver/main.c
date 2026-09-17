@@ -271,6 +271,11 @@ typedef struct {
   App *self;
   gchar *text;
   gchar *page;
+  /* The beacon and the word beside it. strip_text is what decides whether
+   * this update touches them at all, because strip_css NULL is meaningful:
+   * it is the grey. */
+  gchar *strip_css;
+  gchar *strip_text;
 } UiUpdate;
 
 static gboolean
@@ -281,8 +286,12 @@ apply_ui_update (gpointer data)
     set_status (update->self, update->text);
   if (update->page)
     show_page (update->self, update->page);
+  if (update->strip_text)
+    set_strip_state (update->self, update->strip_css, update->strip_text);
   g_free (update->text);
   g_free (update->page);
+  g_free (update->strip_css);
+  g_free (update->strip_text);
   g_free (update);
   return G_SOURCE_REMOVE;
 }
@@ -294,6 +303,18 @@ post_ui (App *self, const gchar *text, const gchar *page)
   update->self = self;
   update->text = g_strdup (text);
   update->page = g_strdup (page);
+  g_idle_add (apply_ui_update, update);
+}
+
+/* The same hop, for the one thing on this window that is only ever changed
+ * from a streaming thread and is not a sentence. */
+static void
+post_strip (App *self, const gchar *css, const gchar *text)
+{
+  UiUpdate *update = g_new0 (UiUpdate, 1);
+  update->self = self;
+  update->strip_css = g_strdup (css);
+  update->strip_text = g_strdup (text);
   g_idle_add (apply_ui_update, update);
 }
 
@@ -768,6 +789,38 @@ on_connection_state (GstElement *webrtc, GParamSpec *pspec, App *self)
 
   if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED)
     post_ui (self, "Connected", NULL);
+  /* The phone hung up. Not a failure and not a loss: this is what a peer
+   * closing its connection looks like from here, and it was the one state
+   * this handler did not read.
+   *
+   * The protocol has a "bye" for it and the sender does send one, but a
+   * message only arrives if the socket is still there to carry it, and
+   * every way a phone can leave that does not involve pressing Stop --
+   * killed from Recents, out of battery, carried out of range -- ends the
+   * media connection without ending anything politely. Until this branch
+   * existed all of those left the last frame frozen on the glass under a
+   * strip still reading Mirroring, with PATH, BUFFER and PICTURE all still
+   * filled in, which is the one thing this window must never say when it
+   * is not true.
+   *
+   * Reported from a real cast: Stop on the phone, and the desktop went on
+   * showing the launcher it had last received.
+   *
+   * Not when we are the ones hanging up: Disconnect tears the pipeline down
+   * and this fires on the way, and "The phone stopped casting" would land on
+   * top of the "Ready for the next cast" that press had just written. */
+  else if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED
+      && !self->disconnecting) {
+    post_ui (self, "The phone stopped casting", "idle");
+    g_idle_add (drop_session_idle, self);
+  }
+  /* Not the end of anything yet: ICE calls a connection disconnected while
+   * it still has consent checks left to try, and a walk between two access
+   * points passes through here and comes back. It gets the amber the strip
+   * keeps for the state between working and failed, and whichever of the
+   * two branches above it settles into does the deciding. */
+  else if (state == GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED)
+    post_strip (self, "warn", "The link dropped; waiting");
   else if (state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED) {
     post_ui (self, "The connection failed — is the TURN relay reachable?", "idle");
     /* Saying so was never enough. webrtcbin goes on sending on a transport
