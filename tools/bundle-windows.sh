@@ -109,11 +109,19 @@ done
 # factory calls) and from webrtcbin's own internals: it makes an rtpbin, a pair
 # of nice elements, the DTLS-SRTP encoder and decoder, the jitter buffer,
 # retransmission and the demuxers under them.
+#
+# d3d11h264dec is deliberately not in it. The d3d11 plugin registers its
+# decoders per adapter, and a CI runner has no GPU, so the element does not
+# exist there however correctly the plugin is shipped -- the first run of
+# this check failed on exactly that and nothing else. main.c makes the same
+# allowance at runtime: it looks the factory up with
+# gst_element_factory_find and falls back to avdec_h264 when it is absent or
+# ranked none. What this script can check is that the plugin file is here,
+# and the loop above exits non-zero if it is not.
 ELEMENTS="
   webrtcbin rtph264depay rtpvp8depay h264parse
   tee queue identity capsfilter filesink fakesink funnel
   videoconvert matroskamux avdec_h264 vp8dec gtk4paintablesink
-  d3d11h264dec
   rtpbin rtpjitterbuffer rtpssrcdemux rtpptdemux rtpstorage
   rtprtxsend rtprtxreceive
   nicesrc nicesink dtlssrtpenc dtlssrtpdec srtpenc srtpdec
