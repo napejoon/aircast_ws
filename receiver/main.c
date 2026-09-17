@@ -2188,7 +2188,7 @@ build_idle_page (App *self)
    * during a cast reported to a page nobody could see. */
   GtkWidget *update = gtk_button_new_with_label ("Update");
   gtk_button_set_has_frame (GTK_BUTTON (update), FALSE);
-  gtk_widget_add_css_class (update, "link");
+  gtk_widget_add_css_class (update, "foot-link");
   gtk_widget_set_tooltip_text (update, "Check for a new version");
   g_signal_connect (update, "clicked", G_CALLBACK (on_update_clicked), self);
   gtk_box_append (GTK_BOX (update_row), update);
@@ -2204,7 +2204,7 @@ build_idle_page (App *self)
   GtkWidget *wireless =
       gtk_button_new_with_label ("No app on the phone? Use Windows Wireless Display");
   gtk_button_set_has_frame (GTK_BUTTON (wireless), FALSE);
-  gtk_widget_add_css_class (wireless, "link");
+  gtk_widget_add_css_class (wireless, "foot-link");
   gtk_widget_set_tooltip_text (wireless,
       "Opens Settings > System > Projecting to this PC, where Windows' own "
       "Miracast receiver is installed and switched on. Adding it needs an "

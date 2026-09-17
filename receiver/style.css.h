@@ -112,8 +112,13 @@
 
 /* The way out of this window, and the update check beside it: text that can be
  * clicked, not buttons that look like they run the cast. Turquoise on hover
- * only, so the resting card stays a card and not a page of links. */
-"button.link {"
+ * only, so the resting card stays a card and not a page of links.
+ *
+ * Not called "link". That is GtkLinkButton's own style class, Adwaita defines
+ * button.link with an underline and the accent colour, and a class named after
+ * what a thing is rather than where it lives collides with the stock sheet:
+ * the first build of this card came back with both footnotes underlined. */
+"button.foot-link {"
 "  padding: 4px 8px;"
 "  border: none;"
 "  border-radius: 8px;"
@@ -122,12 +127,12 @@
 "  color: #7f9896;"
 "}"
 
-"button.link:hover {"
+"button.foot-link:hover {"
 "  background: rgba(61, 220, 208, 0.08);"
 "  color: #3ddcd0;"
 "}"
 
-"button.link:focus-visible {"
+"button.foot-link:focus-visible {"
 "  outline: 2px solid #3ddcd0;"
 "  outline-offset: -2px;"
 "  color: #3ddcd0;"
