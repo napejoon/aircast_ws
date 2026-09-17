@@ -186,6 +186,17 @@
 "  border-right: none;"
 "}"
 
+/* Which is exactly what the state cell became once the readings stopped
+ * appearing on the idle page: a label, a rule, and nothing after it. The
+ * divider is the readings' left edge now, so it leaves when they do. */
+".cell-first {"
+"  border-right: none;"
+"}"
+
+".readings {"
+"  border-left: 1px solid #1c3532;"
+"}"
+
 ".cell-key {"
 "  font-size: 9px;"
 "  font-weight: 700;"

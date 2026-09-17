@@ -2549,6 +2549,10 @@ build_strip (App *self)
 
   GtkWidget *state = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   gtk_widget_add_css_class (state, "cell");
+  /* The divider between the state and the readings belongs to the readings,
+     not to the state: they are the half that comes and goes, and a rule left
+     behind when they go is a row that looks cut off. */
+  gtk_widget_add_css_class (state, "cell-first");
   /* A box, not an empty label: an empty GtkLabel is still one text line tall,
    * and the CSS disc came out as a pill. */
   self->strip_dot = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
@@ -2565,6 +2569,7 @@ build_strip (App *self)
    * handle to bring it back and no answer to "am I still connected", which is
    * the one thing worth a permanent line of pixels. */
   self->strip_readings = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_add_css_class (self->strip_readings, "readings");
   gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("PATH", "—", &self->strip_path));
   /* No LATENCY cell: a receive-only webrtcbin has no remote-inbound report and
    * so no round-trip-time; the phone's card shows it from its own stats. */
