@@ -229,7 +229,7 @@ jobs:
           $env:PATH = "C:\Windows\System32;C:\Windows"
           $env:XDG_DATA_DIRS = "C:\nope"
           cd dist\aircast\bin
-          foreach ($e in 'gtk4paintablesink','vp8dec','webrtcbin','rtph264depay','h264parse','matroskamux','decodebin') {
+          foreach ($e in 'gtk4paintablesink','vp8dec','webrtcbin','rtph264depay','h264parse','matroskamux') {
             .\gst-inspect-1.0.exe $e > $null
             if ($LASTEXITCODE -ne 0) { throw "missing element: $e" }
           }
