@@ -252,10 +252,15 @@ jobs:
           wix msi validate -ice ICE105 "Quoise-$env:VERSION-x64.msi"
           # A harvest that finds nothing is a warning, not an error, and produces
           # a 35 KB installer that installs a program which cannot start. The
-          # bundle is ~350 MB; anything under 100 MB means harvesting broke.
+          # bundle is ~170 MB since the plugin prune; anything under 40 MB
+          # means harvesting broke. The floor was 100 MB when 299 plugins
+          # shipped and the MSI was 133; it is 67 now, and a floor that has
+          # to be revisited after every prune is one nobody trusts. 40 is
+          # far above the 35 KB an empty harvest produces, which is the only
+          # failure this number exists to catch.
           $msi = Get-Item "Quoise-$env:VERSION-x64.msi"
           "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
-          if ($msi.Length -lt 100MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
+          if ($msi.Length -lt 40MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
 
       - name: The layout the MSI actually installs
         shell: pwsh
