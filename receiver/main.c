@@ -207,6 +207,21 @@ harden_environment (void)
    * an MSYS2 shell has it set. */
   g_unsetenv ("XDG_DATA_DIRS");
 
+  /* Windows draws this window's frame, not GTK.
+   *
+   * GTK's own title bar looks near enough to the real one to be mistaken for
+   * it, and then behaves nothing like it: dragging the window into the side
+   * of the screen does not snap it to half, the top does not maximise it, and
+   * Win+arrow reaches it only through the window manager's fallbacks. All of
+   * that is Aero Snap, all of it belongs to the frame, and a client-drawn
+   * frame does not have it. This window has no header bar and puts nothing in
+   * the title but its name, so it was paying for a frame it does not use.
+   *
+   * Set rather than overridden, so GTK_CSD from the environment still wins,
+   * and set here because gtk_window_constructed reads it once, at the moment
+   * the first window is made. */
+  g_setenv ("GTK_CSD", "0", FALSE);
+
   gchar *root = g_win32_get_package_installation_directory_of_module (NULL);
   if (root) {
     gchar *schemas = g_build_filename (root, "share", "glib-2.0", "schemas", NULL);
