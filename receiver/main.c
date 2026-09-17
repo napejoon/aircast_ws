@@ -127,6 +127,7 @@ typedef struct {
   GtkWidget *toolbar;           /* below the video rather than floating over it */
   GtkWidget *strip;             /* the whole bottom bar, hidden in fullscreen */
   GtkWidget *strip_readings;    /* the six cells, foldable as a group */
+  gboolean readings_wanted;     /* what D last asked for, across page switches */
   GtkWidget *fullscreen_button; /* its icon turns over with the state */
   gboolean strip_was_shown;     /* folded state, remembered across fullscreen */
   gboolean was_maximized;       /* window state to restore when fullscreen ends */
@@ -277,6 +278,7 @@ static void drop_session (App *self);
 static void set_strip_state (App *self, const gchar *css, const gchar *text);
 static gboolean poll_stats (gpointer data);
 static void on_strip_toggled (GtkButton *button, App *self);
+static void apply_strip_readings (App *self);
 
 /* ----------------------------------------------------------------- interface */
 
@@ -296,6 +298,7 @@ show_page (App *self, const gchar *page)
    * no picture to record. */
   if (self->toolbar)
     gtk_widget_set_visible (self->toolbar, g_str_equal (page, "live"));
+  apply_strip_readings (self);
   /* And fullscreen belongs to the mirror, so leaving the mirror leaves it.
    *
    * The line above is what makes this necessary: the only visible way out of
@@ -2278,18 +2281,47 @@ build_live_page (App *self)
   return frame;
 }
 
+/* The readings are PATH, BUFFER, PICTURE and LOSS, and every one of them is an
+ * em dash until a session fills it. The idle card is the screen this program
+ * spends most of its life showing, and four labelled dashes under a card asking
+ * someone to scan a code are furniture rather than information -- so they
+ * belong to the live page. The chevron goes with them: a fold control over
+ * nothing to fold is worse than no control at all.
+ *
+ * The preference outlives the page, which is why it is a field and not the
+ * widget's own visibility. Someone who folded the readings away mid-cast gets
+ * them folded on the next one, instead of having the return to the idle card
+ * quietly undo what they asked for. */
+static void
+apply_strip_readings (App *self)
+{
+  if (!self->strip_readings || !self->stack)
+    return;
+  const gchar *page = gtk_stack_get_visible_child_name (GTK_STACK (self->stack));
+  gboolean live = page && g_str_equal (page, "live");
+  gtk_widget_set_visible (self->strip_readings, live && self->readings_wanted);
+  gtk_widget_set_visible (self->strip_toggle, live);
+}
+
 /* Folds the readings away, leaving the state and the chevron that brings them
  * back. The icon turns over with the state so the button says which way it
  * goes rather than what it is. */
 static void
 on_strip_toggled (GtkButton *button, App *self)
 {
-  gboolean shown = !gtk_widget_get_visible (self->strip_readings);
-  gtk_widget_set_visible (self->strip_readings, shown);
+  const gchar *page = gtk_stack_get_visible_child_name (GTK_STACK (self->stack));
+  /* D reaches here from the key handler on either page, and the chevron is not
+   * on the idle one. Flipping a preference nobody can see flipped would have
+   * the next cast open in a state its user never chose. */
+  if (!page || !g_str_equal (page, "live"))
+    return;
+
+  self->readings_wanted = !self->readings_wanted;
+  apply_strip_readings (self);
   gtk_button_set_icon_name (GTK_BUTTON (self->strip_toggle),
-      shown ? "go-down-symbolic" : "go-up-symbolic");
+      self->readings_wanted ? "go-down-symbolic" : "go-up-symbolic");
   gtk_widget_set_tooltip_text (self->strip_toggle,
-      shown ? "Hide the readings (D)" : "Show the readings (D)");
+      self->readings_wanted ? "Hide the readings (D)" : "Show the readings (D)");
 }
 
 /* The strip's state half, driven from wherever the session's state actually
@@ -2666,6 +2698,10 @@ activate (GtkApplication *app, gpointer user_data)
   gtk_widget_set_visible (self->toolbar, FALSE);
   self->strip = build_strip (self);
   self->strip_was_shown = TRUE;
+  /* The window opens on the idle page without going through show_page -- the
+   * stack shows whichever child was added first -- so the first application of
+   * the rule above has to happen here. */
+  apply_strip_readings (self);
   gtk_box_append (GTK_BOX (column), self->stack);
   gtk_box_append (GTK_BOX (column), self->toolbar);
   gtk_box_append (GTK_BOX (column), self->strip);
@@ -2766,7 +2802,7 @@ main (int argc, char *argv[])
   /* G_MININT, not -1: -1 is a number the user can type, and the guards below
    * read this field as "negative means nobody has chosen". Anything reachable
    * from the command line has to stay out of the sentinel's way. */
-  App self = { .latency_ms = G_MININT };
+  App self = { .latency_ms = G_MININT, .readings_wanted = TRUE };
 
   startup_us = g_get_monotonic_time ();
   /* First statement in main(): before gst_init() runs inside the option parse,
