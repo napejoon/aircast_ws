@@ -257,8 +257,14 @@ class _SenderPageState extends State<SenderPage> {
     _signaling = null;
     _usb = false;
 
-    await session?.stop();
+    // The bye first, and the teardown after. It used to be the other way
+    // round, and session.stop() is four platform round-trips into
+    // libwebrtc -- tracks, stream, close, dispose -- so the one message
+    // that tells the desktop this cast is over was queued behind all of
+    // them. Nothing is lost by telling the far end first: it has no more
+    // use for a peer connection this side is about to destroy.
     await signaling?.close();
+    await session?.stop();
     if (usb) await UsbCast.stop();
     if (!mounted) return;
     setState(() {
