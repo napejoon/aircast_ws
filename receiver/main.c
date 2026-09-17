@@ -148,6 +148,28 @@ typedef struct {
   gboolean disconnecting;
 } App;
 
+/* Monotonic, from the first statement in main(), so the numbers in the log
+ * are wall time from launch and can be read against a stopwatch.
+ *
+ * Startup has been reported slow -- ten seconds from the Start menu -- and
+ * measuring it from outside the process cannot say which part. A launch from
+ * a shortcut reached its window in 15.2 s on the machine it was reported
+ * from and in 1.4 s on the next launch, which is the shape of something
+ * touching the filesystem cold, and there are four candidates between main()
+ * and the first frame. These five lines cost nothing and end the guessing:
+ * whoever sees it slow again can send the log. */
+static gint64 startup_us;
+
+static void
+mark (const gchar *what)
+{
+  /* g_printerr, not g_message: the log file this ends up in is a freopen of
+   * stderr and nothing redirects stdout, which is where GLib's default
+   * handler puts a message. */
+  g_printerr ("startup: %s at %.2f s\n", what,
+      (g_get_monotonic_time () - startup_us) / 1e6);
+}
+
 /* Run before anything else in main(), and specifically before
  * g_option_context_parse(), because gst_init() runs inside it and the registry
  * scan is the largest LoadLibrary surface in the process.
@@ -2593,6 +2615,7 @@ activate (GtkApplication *app, gpointer user_data)
   gtk_widget_add_controller (self->window, keys);
 
   gtk_window_present (GTK_WINDOW (self->window));
+  mark ("window presented");
 
   /* Throttled to one attempt per day and keyed on attempts, so neither a
    * hostile network nor a restart loop can spin it. */
@@ -2682,6 +2705,7 @@ main (int argc, char *argv[])
    * from the command line has to stay out of the sentinel's way. */
   App self = { .latency_ms = G_MININT };
 
+  startup_us = g_get_monotonic_time ();
   /* First statement in main(): before gst_init() runs inside the option parse,
    * and before anything can cache a data directory. */
   harden_environment ();
@@ -2758,11 +2782,15 @@ main (int argc, char *argv[])
   g_option_context_add_main_entries (ctx, entries, NULL);
   g_option_context_add_group (ctx, gst_init_get_option_group ());
   GError *error = NULL;
+  mark ("options built");
+  /* gst_init runs inside this, and with it the plugin registry: 299 plugins
+   * in the shipped bundle, every one of them a LoadLibrary. */
   if (!g_option_context_parse (ctx, &argc, &argv, &error)) {
     g_printerr ("%s\n", error->message);
     return 1;
   }
   g_option_context_free (ctx);
+  mark ("gst_init done");
 
   /* Refused out loud rather than quietly reverting to the automatic choice the
    * flag was typed to turn off. Zero goes with the negatives: a jitter buffer
@@ -2888,7 +2916,9 @@ main (int argc, char *argv[])
   g_setenv ("GDK_DEBUG", "dcomp", FALSE);
 #endif
 
+  mark ("the Direct3D probe done");
   gtk_init ();
+  mark ("gtk_init done");
 
   self.app = gtk_application_new ("io.aircast.receiver", G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect (self.app, "activate", G_CALLBACK (activate), &self);

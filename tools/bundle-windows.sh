@@ -88,6 +88,20 @@ gio-querymodules "$OUT/lib/gio/modules" || true
 cp -r "$PREFIX/share/icons/Adwaita" "$OUT/share/icons/"
 cp -r "$PREFIX/share/icons/hicolor" "$OUT/share/icons/" 2>/dev/null || true
 
+# And an index for it, for the same reason gio-querymodules runs above: with
+# no icon-theme.cache GTK walks the theme itself, and Adwaita is thousands of
+# small files. On a warm filesystem that walk is nothing; on a cold one it is
+# seconds, and startup is exactly when the filesystem is cold.
+# gtk4-update-icon-cache is GTK 4's name for it; the unprefixed one is GTK 3's
+# and is what a machine with both installed may have instead. An index that
+# fails to build is a slower first launch and nothing worse, so neither name
+# being present is not an error.
+icon_cache () {
+  gtk4-update-icon-cache --force --quiet "$1" 2>/dev/null \n    || gtk-update-icon-cache --force --quiet "$1" 2>/dev/null \n    || echo "  no icon-cache tool for $1; first launch will walk it" >&2
+}
+icon_cache "$OUT/share/icons/Adwaita"
+[ -d "$OUT/share/icons/hicolor" ] && icon_cache "$OUT/share/icons/hicolor"
+
 # A bundle that gets this far with no theme is a bundle whose buttons are
 # blank, and nothing downstream would notice: the smoke test loads plugins,
 # and the MSI size floor is met by the DLLs alone.
