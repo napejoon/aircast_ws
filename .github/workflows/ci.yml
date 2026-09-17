@@ -262,6 +262,22 @@ jobs:
           "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
           if ($msi.Length -lt 40MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
 
+      - name: The registry the installer prebuilds
+        # After the MSI is built, deliberately: the harvest globs the staging
+        # tree, and a registry.bin sitting there would ship inside the package
+        # carrying this runner's paths.
+        #
+        # This is the one part of the installer an administrative install does
+        # not exercise -- msiexec /a extracts files and runs no custom actions --
+        # so CI runs the same command the custom action runs and then checks
+        # that the program reads what it wrote, rather than falling back to the
+        # per-user cache in %LOCALAPPDATA%.
+        run: |
+          ./dist/aircast/bin/aircast-receiver.exe --prebuild-registry
+          test -s dist/aircast/registry.bin
+          GST_DEBUG=GST_REGISTRY:4 ./dist/aircast/bin/aircast-receiver.exe --selftest 2>&1             | grep -q 'reading registry cache:.*aircast.registry\.bin'
+          rm dist/aircast/registry.bin
+
       - name: The layout the MSI actually installs
         shell: pwsh
         # Size proves the harvest found bytes, not that it put them anywhere

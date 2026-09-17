@@ -71,6 +71,7 @@ typedef struct {
   gboolean relay_only;
   gboolean insecure;
   gboolean selftest;
+  gboolean prebuild_registry;
   gchar *verify_manifest;
   gchar *verify_signature;
 
@@ -180,7 +181,7 @@ mark (const gchar *what)
  * install directory. No signature scheme anywhere else in this program touches
  * that, which is why this is the first thing that happens. */
 static void
-harden_environment (void)
+harden_environment (gboolean prebuild)
 {
 #ifdef G_OS_WIN32
   /* Windows only, and deliberately. On Linux these variables are the user's own
@@ -227,6 +228,28 @@ harden_environment (void)
     gchar *schemas = g_build_filename (root, "share", "glib-2.0", "schemas", NULL);
     g_setenv ("GSETTINGS_SCHEMA_DIR", schemas, TRUE);
     g_free (schemas);
+
+    /* The registry the installer built, if it is there. Measured on the shipped
+     * bundle: with no cache gst_init spends 0.99 s rebuilding it on a warm
+     * filesystem and 4.82 s on a cold one, because a rebuild spawns
+     * gst-plugin-scanner and LoadLibrary's every plugin through a Defender that
+     * has not seen them. With a cache it is 0.02 s and the plugins load lazily,
+     * when a pipeline first asks for an element, which is after the window.
+     *
+     * The installer runs --prebuild-registry as SYSTEM once the files are
+     * down, so the first launch of the first user already finds it. The
+     * existence test is what keeps the zip bundle and a build tree on their
+     * per-user cache: pointing GST_REGISTRY at a file nobody can write is how
+     * you get a rescan on every launch instead of one.
+     *
+     * ponytail: a registry that goes stale under a read-only install (someone
+     * replaces a plugin DLL by hand) rescans every launch and says so only in
+     * the log. Re-running the installer rebuilds it; detecting it here would
+     * cost the stat of all 18 plugins that the cache exists to avoid. */
+    gchar *registry = g_build_filename (root, "registry.bin", NULL);
+    if (prebuild || g_file_test (registry, G_FILE_TEST_EXISTS))
+      g_setenv ("GST_REGISTRY", registry, TRUE);
+    g_free (registry);
     g_free (root);
   }
 
@@ -2722,8 +2745,16 @@ main (int argc, char *argv[])
 
   startup_us = g_get_monotonic_time ();
   /* First statement in main(): before gst_init() runs inside the option parse,
-   * and before anything can cache a data directory. */
-  harden_environment ();
+   * and before anything can cache a data directory.
+   *
+   * The flag is read from argv rather than from the parse below for the same
+   * reason: gst_init runs inside g_option_context_parse, and GST_REGISTRY has
+   * to be set before it. */
+  gboolean prebuild = FALSE;
+  for (int i = 1; i < argc; i++)
+    if (g_str_equal (argv[i], "--prebuild-registry"))
+      prebuild = TRUE;
+  harden_environment (prebuild);
 
   GOptionEntry entries[] = {
     { "signal", 's', 0, G_OPTION_ARG_STRING, &self.signal_url,
@@ -2741,6 +2772,12 @@ main (int argc, char *argv[])
         "Allow a plaintext ws:// signalling URL. LAN bring-up only", NULL },
     { "selftest", 0, 0, G_OPTION_ARG_NONE, &self.selftest,
         "Run the version and signature self-tests and exit", NULL },
+    /* Hidden: the installer's, not the user's. Nothing to type and nothing to
+       get wrong -- gst_init has already written the registry by the time the
+       flag is read, so this only has to not open a window. */
+    { "prebuild-registry", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE,
+        &self.prebuild_registry,
+        "Build the shared plugin registry and exit", NULL },
     { "verify-manifest", 0, 0, G_OPTION_ARG_FILENAME, &self.verify_manifest,
         "Verify an update manifest against this build's key and exit", "FILE" },
     { "verify-signature", 0, 0, G_OPTION_ARG_FILENAME, &self.verify_signature,
@@ -2806,6 +2843,10 @@ main (int argc, char *argv[])
   }
   g_option_context_free (ctx);
   mark ("gst_init done");
+
+  /* gst_init wrote the registry on its way through the parse. */
+  if (self.prebuild_registry)
+    return 0;
 
   /* Refused out loud rather than quietly reverting to the automatic choice the
    * flag was typed to turn off. Zero goes with the negatives: a jitter buffer
