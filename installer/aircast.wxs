@@ -101,6 +101,13 @@
             <Shortcut Directory="ShortcutFolder" Name="Quoise"
                       Target="[#AircastExe]" WorkingDirectory="BinFolder" />
             <RemoveFolder Id="CleanShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
+            <!-- Written by the custom action below, so MSI does not know about
+                 it and would leave it behind on uninstall. Hung on this
+                 component rather than a new one: a component is a unit of
+                 install, and this file is installed and removed with the exe
+                 that reads it. -->
+            <RemoveFile Id="CleanGstRegistry" Directory="INSTALLFOLDER"
+                        Name="registry.bin" On="uninstall" />
           </Component>
         </Directory>
 
@@ -116,5 +123,29 @@
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="ShortcutFolder" Name="Quoise" />
     </StandardDirectory>
+
+    <!-- The first launch used to pay for the GStreamer plugin registry: 4.82 s
+         of a 7.04 s cold start, spent spawning gst-plugin-scanner and loading
+         all eighteen plugins through a Defender that had not seen them. It is
+         the same work for every user of the machine, and each of them paid it
+         once. Measured again on a warm filesystem it is still 0.99 s against
+         0.02 s with a cache, so this is not only a cold-start fix.
+
+         So the install pays it, once, as SYSTEM: the exe writes the registry
+         next to itself and reads it from there afterwards (receiver/main.c).
+         FileRef rather than Directory, because a deferred custom action cannot
+         resolve a directory property, and FileRef is the installed-executable
+         form, and MSI knows where it put that file.
+
+         Return="ignore" for the reason the icon cache in
+         tools/bundle-windows.sh is allowed to fail: no registry is a slower
+         first launch and nothing worse, and an installer that fails at its last
+         step over a cache is the worse outcome. -->
+    <CustomAction Id="PrebuildGstRegistry" FileRef="AircastExe"
+                  ExeCommand="--prebuild-registry"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="PrebuildGstRegistry" After="InstallFiles" Condition="NOT REMOVE" />
+    </InstallExecuteSequence>
   </Package>
 </Wix>
