@@ -127,6 +127,7 @@ typedef struct {
   GtkWidget *toolbar;           /* below the video rather than floating over it */
   GtkWidget *strip;             /* the whole bottom bar, hidden in fullscreen */
   GtkWidget *strip_readings;    /* the six cells, foldable as a group */
+  gboolean readings_wanted;     /* what D last asked for, across page switches */
   GtkWidget *fullscreen_button; /* its icon turns over with the state */
   gboolean strip_was_shown;     /* folded state, remembered across fullscreen */
   gboolean was_maximized;       /* window state to restore when fullscreen ends */
@@ -277,6 +278,7 @@ static void drop_session (App *self);
 static void set_strip_state (App *self, const gchar *css, const gchar *text);
 static gboolean poll_stats (gpointer data);
 static void on_strip_toggled (GtkButton *button, App *self);
+static void apply_strip_readings (App *self);
 
 /* ----------------------------------------------------------------- interface */
 
@@ -296,6 +298,7 @@ show_page (App *self, const gchar *page)
    * no picture to record. */
   if (self->toolbar)
     gtk_widget_set_visible (self->toolbar, g_str_equal (page, "live"));
+  apply_strip_readings (self);
   /* And fullscreen belongs to the mirror, so leaving the mirror leaves it.
    *
    * The line above is what makes this necessary: the only visible way out of
@@ -2055,13 +2058,25 @@ draw_pairing_qr (GtkDrawingArea *area, cairo_t *cr, int width, int height,
   double ox = (width - side) / 2.0;
   double oy = (height - side) / 2.0;
 
-  cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
-  cairo_rectangle (cr, ox, oy, side, side);
+  /* #f7efe1, and rounded. A pure white square with hard corners was the
+   * brightest and squarest thing on a warm, round-cornered card, so it read as
+   * pasted on rather than printed -- and it out-shouted the six digits, which
+   * are what someone across the room is actually there to read. The radius is
+   * two modules, which stays inside the four-module quiet zone and so takes
+   * nothing a scanner needs. Against the ink below it this is still 16:1. */
+  const double r = module * 2.0;
+  cairo_new_sub_path (cr);
+  cairo_arc (cr, ox + side - r, oy + r,        r, -G_PI / 2, 0);
+  cairo_arc (cr, ox + side - r, oy + side - r, r, 0,         G_PI / 2);
+  cairo_arc (cr, ox + r,        oy + side - r, r, G_PI / 2,  G_PI);
+  cairo_arc (cr, ox + r,        oy + r,        r, G_PI,      3 * G_PI / 2);
+  cairo_close_path (cr);
+  cairo_set_source_rgb (cr, 0.969, 0.937, 0.882);
   cairo_fill (cr);
 
-  /* #0b1214, the window behind the card: the code reads as a hole cut in the
+  /* #06100f, the window behind the card: the code reads as a hole cut in the
    * screen rather than as ink printed on it. */
-  cairo_set_source_rgb (cr, 0.043, 0.071, 0.078);
+  cairo_set_source_rgb (cr, 0.024, 0.063, 0.059);
   for (int y = 0; y < qr->width; y++) {
     for (int x = 0; x < qr->width; x++) {
       if (qr->data[y * qr->width + x] & 1)
@@ -2158,17 +2173,29 @@ build_idle_page (App *self)
   gtk_label_set_selectable (GTK_LABEL (self->update_label), TRUE);
 
   gtk_box_append (GTK_BOX (box), self->status_label);
-  gtk_box_append (GTK_BOX (box), self->update_label);
+
+  /* Everything below the connection line is small print, and it used to be
+   * four labels of nearly one size stacked eight pixels apart: the card ended
+   * in a paragraph of grey that read as a program printing at the user. They
+   * live in a footnote now -- one hairline, real space above it -- and the
+   * update message sits on the same row as the button that acts on it rather
+   * than on the line above it. */
+  GtkWidget *footnote = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  gtk_widget_add_css_class (footnote, "footnote");
+  GtkWidget *update_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_widget_set_halign (update_row, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (update_row), self->update_label);
 
   /* Next to the label it writes to. It sat in the toolbar, which show_page
    * hides on this page -- so "click Update" pointed at nothing, and a press
    * during a cast reported to a page nobody could see. */
   GtkWidget *update = gtk_button_new_with_label ("Update");
   gtk_button_set_has_frame (GTK_BUTTON (update), FALSE);
-  gtk_widget_add_css_class (update, "hint");
+  gtk_widget_add_css_class (update, "foot-link");
   gtk_widget_set_tooltip_text (update, "Check for a new version");
   g_signal_connect (update, "clicked", G_CALLBACK (on_update_clicked), self);
-  gtk_box_append (GTK_BOX (box), update);
+  gtk_box_append (GTK_BOX (update_row), update);
+  gtk_box_append (GTK_BOX (footnote), update_row);
 
 #ifdef G_OS_WIN32
   /* On the idle card and nowhere else: this is the screen someone stares at
@@ -2180,16 +2207,17 @@ build_idle_page (App *self)
   GtkWidget *wireless =
       gtk_button_new_with_label ("No app on the phone? Use Windows Wireless Display");
   gtk_button_set_has_frame (GTK_BUTTON (wireless), FALSE);
-  gtk_widget_add_css_class (wireless, "hint");
+  gtk_widget_add_css_class (wireless, "foot-link");
   gtk_widget_set_tooltip_text (wireless,
       "Opens Settings > System > Projecting to this PC, where Windows' own "
       "Miracast receiver is installed and switched on. Adding it needs an "
       "administrator once. The picture is then Windows': aircast cannot record "
       "it or tune its latency.");
   g_signal_connect (wireless, "clicked", G_CALLBACK (on_wireless_display_clicked), self);
-  gtk_box_append (GTK_BOX (box), wireless);
+  gtk_box_append (GTK_BOX (footnote), wireless);
 #endif
 
+  gtk_box_append (GTK_BOX (box), footnote);
   return box;
 }
 
@@ -2253,18 +2281,47 @@ build_live_page (App *self)
   return frame;
 }
 
+/* The readings are PATH, BUFFER, PICTURE and LOSS, and every one of them is an
+ * em dash until a session fills it. The idle card is the screen this program
+ * spends most of its life showing, and four labelled dashes under a card asking
+ * someone to scan a code are furniture rather than information -- so they
+ * belong to the live page. The chevron goes with them: a fold control over
+ * nothing to fold is worse than no control at all.
+ *
+ * The preference outlives the page, which is why it is a field and not the
+ * widget's own visibility. Someone who folded the readings away mid-cast gets
+ * them folded on the next one, instead of having the return to the idle card
+ * quietly undo what they asked for. */
+static void
+apply_strip_readings (App *self)
+{
+  if (!self->strip_readings || !self->stack)
+    return;
+  const gchar *page = gtk_stack_get_visible_child_name (GTK_STACK (self->stack));
+  gboolean live = page && g_str_equal (page, "live");
+  gtk_widget_set_visible (self->strip_readings, live && self->readings_wanted);
+  gtk_widget_set_visible (self->strip_toggle, live);
+}
+
 /* Folds the readings away, leaving the state and the chevron that brings them
  * back. The icon turns over with the state so the button says which way it
  * goes rather than what it is. */
 static void
 on_strip_toggled (GtkButton *button, App *self)
 {
-  gboolean shown = !gtk_widget_get_visible (self->strip_readings);
-  gtk_widget_set_visible (self->strip_readings, shown);
+  const gchar *page = gtk_stack_get_visible_child_name (GTK_STACK (self->stack));
+  /* D reaches here from the key handler on either page, and the chevron is not
+   * on the idle one. Flipping a preference nobody can see flipped would have
+   * the next cast open in a state its user never chose. */
+  if (!page || !g_str_equal (page, "live"))
+    return;
+
+  self->readings_wanted = !self->readings_wanted;
+  apply_strip_readings (self);
   gtk_button_set_icon_name (GTK_BUTTON (self->strip_toggle),
-      shown ? "go-down-symbolic" : "go-up-symbolic");
+      self->readings_wanted ? "go-down-symbolic" : "go-up-symbolic");
   gtk_widget_set_tooltip_text (self->strip_toggle,
-      shown ? "Hide the readings (D)" : "Show the readings (D)");
+      self->readings_wanted ? "Hide the readings (D)" : "Show the readings (D)");
 }
 
 /* The strip's state half, driven from wherever the session's state actually
@@ -2492,6 +2549,10 @@ build_strip (App *self)
 
   GtkWidget *state = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   gtk_widget_add_css_class (state, "cell");
+  /* The divider between the state and the readings belongs to the readings,
+     not to the state: they are the half that comes and goes, and a rule left
+     behind when they go is a row that looks cut off. */
+  gtk_widget_add_css_class (state, "cell-first");
   /* A box, not an empty label: an empty GtkLabel is still one text line tall,
    * and the CSS disc came out as a pill. */
   self->strip_dot = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
@@ -2508,6 +2569,7 @@ build_strip (App *self)
    * handle to bring it back and no answer to "am I still connected", which is
    * the one thing worth a permanent line of pixels. */
   self->strip_readings = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_add_css_class (self->strip_readings, "readings");
   gtk_box_append (GTK_BOX (self->strip_readings), strip_cell ("PATH", "—", &self->strip_path));
   /* No LATENCY cell: a receive-only webrtcbin has no remote-inbound report and
    * so no round-trip-time; the phone's card shows it from its own stats. */
@@ -2641,6 +2703,10 @@ activate (GtkApplication *app, gpointer user_data)
   gtk_widget_set_visible (self->toolbar, FALSE);
   self->strip = build_strip (self);
   self->strip_was_shown = TRUE;
+  /* The window opens on the idle page without going through show_page -- the
+   * stack shows whichever child was added first -- so the first application of
+   * the rule above has to happen here. */
+  apply_strip_readings (self);
   gtk_box_append (GTK_BOX (column), self->stack);
   gtk_box_append (GTK_BOX (column), self->toolbar);
   gtk_box_append (GTK_BOX (column), self->strip);
@@ -2741,7 +2807,7 @@ main (int argc, char *argv[])
   /* G_MININT, not -1: -1 is a number the user can type, and the guards below
    * read this field as "negative means nobody has chosen". Anything reachable
    * from the command line has to stay out of the sentinel's way. */
-  App self = { .latency_ms = G_MININT };
+  App self = { .latency_ms = G_MININT, .readings_wanted = TRUE };
 
   startup_us = g_get_monotonic_time ();
   /* First statement in main(): before gst_init() runs inside the option parse,
