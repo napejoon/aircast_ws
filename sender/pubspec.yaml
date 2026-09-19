@@ -1,4 +1,4 @@
-name: aircast_sender
+name: kagami_sender
 description: Screen sender for aircast (WebRTC over own TURN, plus an Android USB path).
 publish_to: none
 version: 0.1.0

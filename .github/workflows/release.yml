@@ -56,17 +56,17 @@ jobs:
           cmake --build build
 
       - name: Self-test
-        run: ./build/aircast-receiver.exe --selftest
+        run: ./build/kagami.exe --selftest
 
       - name: Bundle
-        run: bash tools/bundle-windows.sh build dist/aircast
+        run: bash tools/bundle-windows.sh build dist/kagami
 
       - name: Smoke test the bundle
         shell: pwsh
         run: |
           $env:PATH = "C:\Windows\System32;C:\Windows"
           $env:XDG_DATA_DIRS = "C:\nope"
-          cd dist\aircast\bin
+          cd dist\kagami\bin
           foreach ($e in 'gtk4paintablesink','vp8dec','webrtcbin','rtph264depay','h264parse','matroskamux') {
             .\gst-inspect-1.0.exe $e > $null
             if ($LASTEXITCODE -ne 0) { throw "missing element: $e" }
@@ -79,8 +79,8 @@ jobs:
           # Open Source Maintenance Fee EULA. See ci.yml.
           dotnet tool install --global wix --version 5.0.2
           wix extension add -g WixToolset.UI.wixext/5.0.2
-          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Quoise-$env:VERSION-x64.msi"
-          wix msi validate -ice ICE105 "Quoise-$env:VERSION-x64.msi"
+          wix build installer/kagami.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/kagami -o "Kagami-$env:VERSION-x64.msi"
+          wix msi validate -ice ICE105 "Kagami-$env:VERSION-x64.msi"
           # A harvest that finds nothing is a warning, not an error, and produces
           # a 35 KB installer that installs a program which cannot start. The
           # bundle is ~170 MB since the plugin prune; anything under 40 MB
@@ -89,7 +89,7 @@ jobs:
           # to be revisited after every prune is one nobody trusts. 40 is
           # far above the 35 KB an empty harvest produces, which is the only
           # failure this number exists to catch.
-          $msi = Get-Item "Quoise-$env:VERSION-x64.msi"
+          $msi = Get-Item "Kagami-$env:VERSION-x64.msi"
           "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
           if ($msi.Length -lt 40MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
 
@@ -98,12 +98,12 @@ jobs:
         # The one check that looks at what a user ends up with rather than at
         # what we staged. See ci.yml.
         run: |
-          $msi = (Get-Item "Quoise-$env:VERSION-x64.msi").FullName
+          $msi = (Get-Item "Kagami-$env:VERSION-x64.msi").FullName
           $dir = Join-Path $PWD "extracted"
           $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$msi`"", '/qn', "TARGETDIR=`"$dir`""
           if ($p.ExitCode -ne 0) { throw "administrative install failed with $($p.ExitCode)" }
-          $exe = Get-ChildItem $dir -Recurse -Filter aircast-receiver.exe | Select-Object -First 1
-          if (-not $exe) { throw "the package contains no aircast-receiver.exe" }
+          $exe = Get-ChildItem $dir -Recurse -Filter kagami.exe | Select-Object -First 1
+          if (-not $exe) { throw "the package contains no kagami.exe" }
           foreach ($pat in 'libgtk-4-*.dll', 'libgstreamer-1.0-*.dll') {
             if (-not (Get-ChildItem $exe.Directory.FullName -Filter $pat)) {
               throw "$pat is not beside the installed exe ($($exe.Directory.FullName))"
@@ -120,7 +120,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: msi
-          path: Quoise-*-x64.msi
+          path: Kagami-*-x64.msi
           if-no-files-found: error
 
   apk:
@@ -183,7 +183,7 @@ jobs:
             ls -l build/app/outputs/apk/release/ >&2
             exit 1
           }
-          mv "$APK" "$GITHUB_WORKSPACE/Quoise-$VERSION-unsigned.apk"
+          mv "$APK" "$GITHUB_WORKSPACE/Kagami-$VERSION-unsigned.apk"
 
       - name: Not an empty box
         # The MSI job's size check, for an APK. This is the first build in which
@@ -191,7 +191,7 @@ jobs:
         # the Dart snapshot still zips up fine, still installs, and shows
         # nothing. libapp.so exists only in an AOT build.
         run: |
-          APK="Quoise-$VERSION-unsigned.apk"
+          APK="Kagami-$VERSION-unsigned.apk"
           ls -l "$APK"
           for so in libapp.so libflutter.so; do
             unzip -l "$APK" | grep -q "lib/arm64-v8a/$so" || { echo "APK contains no $so"; exit 1; }
@@ -200,7 +200,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: apk
-          path: Quoise-*-unsigned.apk
+          path: Kagami-*-unsigned.apk
           if-no-files-found: error
 
   attest:
@@ -226,8 +226,8 @@ jobs:
           # user installs: signing changes the digest, and it happens on a
           # machine Actions cannot reach.
           subject-path: |
-            Quoise-*-x64.msi
-            Quoise-*-unsigned.apk
+            Kagami-*-x64.msi
+            Kagami-*-unsigned.apk
 
   draft:
     name: Draft release
@@ -251,7 +251,7 @@ jobs:
           Any asset here whose name ends `-unsigned.apk` cannot be installed:
           Android refuses an unsigned package. It is the input to the
           maintainer's offline signing step, and the signed
-          `Quoise-<version>.apk` replaces it before this release is
+          `Kagami-<version>.apk` replaces it before this release is
           published.
 
           This bundle redistributes GLib, GTK and GStreamer under the LGPL; the
@@ -267,5 +267,5 @@ jobs:
         # make the Actions token enough to ship an update notice, which is
         # exactly what the offline key exists to prevent.
         run: |
-          gh release create "$TAG" Quoise-*-x64.msi Quoise-*-unsigned.apk \
+          gh release create "$TAG" Kagami-*-x64.msi Kagami-*-unsigned.apk \
             --repo "$GITHUB_REPOSITORY" --draft --verify-tag --notes-file notes.md

@@ -1,6 +1,6 @@
 /// What a pairing QR carries: the code to join with, and the server to join it
 /// on. The receiver draws it (receiver/main.c, build_pairing_qr) as
-/// `aircast://pair?c=<code>&s=<url>`.
+/// `kagami://pair?c=<code>&s=<url>`.
 ///
 /// The URL is the whole point. Without it one APK talks only to the server it
 /// was compiled against, and a room with its own receiver and its own relay
@@ -21,7 +21,7 @@ class PairingPayload {
   /// and everything that is not exactly this shape has to leave the scanner
   /// running rather than half-fill the form:
   ///
-  ///  * scheme `aircast`, host `pair`
+  ///  * scheme `kagami`, host `pair`
   ///  * `c` exactly six digits, which is what the server hands out and what the
   ///    code field accepts
   ///  * `s` a ws:// or wss:// URL with a host — the only two things Signaling
@@ -29,7 +29,7 @@ class PairingPayload {
   ///    from the cause
   static PairingPayload? parse(String raw) {
     final uri = Uri.tryParse(raw.trim());
-    if (uri == null || uri.scheme != 'aircast' || uri.host != 'pair') return null;
+    if (uri == null || uri.scheme != 'kagami' || uri.host != 'pair') return null;
 
     final code = uri.queryParameters['c'] ?? '';
     // Length and digits both: int.tryParse takes '+12345' and ' 123456'.

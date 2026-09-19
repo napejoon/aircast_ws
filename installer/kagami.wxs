@@ -3,9 +3,9 @@
   The whole Windows installer.
 
     wix extension add -g WixToolset.UI.wixext/5.0.2
-    wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext \
-      -d Ver=$V -d Stage=dist/aircast -o Quoise-$V-x64.msi
-    wix msi validate -ice ICE105 Quoise-$V-x64.msi
+    wix build installer/kagami.wxs -arch x64 -ext WixToolset.UI.wixext \
+      -d Ver=$V -d Stage=dist/kagami -o Kagami-$V-x64.msi
+    wix msi validate -ice ICE105 Kagami-$V-x64.msi
 
   MSI rather than an NSIS .exe for one reason: <MajorUpgrade/> removes the
   previous version's exact file set. This bundle is several hundred GStreamer
@@ -22,7 +22,7 @@
   Stage is made absolute here rather than required absolute from the caller,
   because a relative Files/@Include is not resolved against the working
   directory: it is appended to the source path of the Directory it sits in, so
-  -d Stage=dist/aircast was searched for under "Quoise\dist\aircast",
+  -d Stage=dist/kagami was searched for under "Kagami\dist\kagami",
   found nothing, and shipped a 65 KB installer holding one executable. A harvest
   root that does not exist is warning WIX8601, not an error. Swapping -b for -d
   changed nothing — both values were relative. The MSI size floor in CI is what
@@ -52,14 +52,14 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <?define StageRoot=$(sys.CURRENTDIR)$(var.Stage)?>
 
-  <Package Name="Quoise"
+  <Package Name="Kagami"
            Manufacturer="napejoon"
            Version="$(var.Ver)"
            UpgradeCode="027C7C65-2D1E-488A-A147-552B9D981628"
            Scope="perMachine">
 
     <!-- AllowSameVersionUpgrades, because the default bound is what left two
-         "Quoise" rows in Apps and Features. Left to itself WiX writes
+         "Kagami" rows in Apps and Features. Left to itself WiX writes
          the detect-and-remove row as "older than ProductVersion, maximum
          excluded", and every build that is not a tag stamps 0.0.0: 0.0.0 is not
          older than 0.0.0, so FindRelatedProducts matched nothing, nothing was
@@ -80,6 +80,14 @@
                   DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- Apps and Features reads this one, and it is the only place the icon has
+         to be named: the Start menu shortcut points at the exe, which carries
+         the same icon as a resource (receiver/CMakeLists.txt), so it needs no
+         Icon of its own. The id ends in .ico because Windows Installer keys the
+         icon's extension off it and a wrong one shows the generic MSI box. -->
+    <Icon Id="kagami.ico" SourceFile="$(sys.CURRENTDIR)installer\kagami.ico" />
+    <Property Id="ARPPRODUCTICON" Value="kagami.ico" />
+
     <!-- Without this the package has no UI sequence at all: double-clicking it
          shows a progress bar and then nothing, which reads as "did that work?".
          WixUI_InstallDir is the smallest set of dialogs that still answers the
@@ -94,12 +102,12 @@
     <WixVariable Id="WixUILicenseRtf" Value="$(sys.CURRENTDIR)installer\license.rtf" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="Quoise">
+      <Directory Id="INSTALLFOLDER" Name="Kagami">
         <Directory Id="BinFolder" Name="bin">
           <Component>
-            <File Id="AircastExe" Source="$(var.StageRoot)\bin\aircast-receiver.exe" />
-            <Shortcut Directory="ShortcutFolder" Name="Quoise"
-                      Target="[#AircastExe]" WorkingDirectory="BinFolder" />
+            <File Id="KagamiExe" Source="$(var.StageRoot)\bin\kagami.exe" />
+            <Shortcut Directory="ShortcutFolder" Name="Kagami"
+                      Target="[#KagamiExe]" WorkingDirectory="BinFolder" />
             <RemoveFolder Id="CleanShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
             <!-- Written by the custom action below, so MSI does not know about
                  it and would leave it behind on uninstall. Hung on this
@@ -115,13 +123,13 @@
              copy of the exe into the same directory, and two components owning
              one target file is an ICE30 error, not a duplicate-file warning. -->
         <Files Include="$(var.StageRoot)\**">
-          <Exclude Files="$(var.StageRoot)\bin\aircast-receiver.exe" />
+          <Exclude Files="$(var.StageRoot)\bin\kagami.exe" />
         </Files>
       </Directory>
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="ShortcutFolder" Name="Quoise" />
+      <Directory Id="ShortcutFolder" Name="Kagami" />
     </StandardDirectory>
 
     <!-- The first launch used to pay for the GStreamer plugin registry: 4.82 s
@@ -141,7 +149,7 @@
          tools/bundle-windows.sh is allowed to fail: no registry is a slower
          first launch and nothing worse, and an installer that fails at its last
          step over a cache is the worse outcome. -->
-    <CustomAction Id="PrebuildGstRegistry" FileRef="AircastExe"
+    <CustomAction Id="PrebuildGstRegistry" FileRef="KagamiExe"
                   ExeCommand="--prebuild-registry"
                   Execute="deferred" Impersonate="no" Return="ignore" />
     <InstallExecuteSequence>

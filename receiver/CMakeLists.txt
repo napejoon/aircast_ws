@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(aircast_receiver C)
+project(kagami C)
 
 set(CMAKE_C_STANDARD 11)
 
@@ -44,18 +44,29 @@ pkg_check_modules(DEPS REQUIRED
 # file at startup -- without it, "run it from a terminal and send me the
 # output", which is how every problem in this project has been diagnosed, stops
 # working.
-add_executable(aircast-receiver WIN32 main.c update_check.c)
-target_compile_definitions(aircast-receiver PRIVATE AIRCAST_VERSION="${AIRCAST_VERSION}" AIRCAST_SIGNAL="${AIRCAST_SIGNAL}")
+# The icon, as a resource rather than a file beside the exe: this is what
+# Explorer, the taskbar and the Start menu shortcut read, and all three read it
+# from the binary. windres ships with the MinGW toolchain that builds this.
+if(WIN32)
+    enable_language(RC)
+    set(KAGAMI_RC "${CMAKE_CURRENT_BINARY_DIR}/kagami.rc")
+    file(WRITE "${KAGAMI_RC}"
+        "1 ICON \"${CMAKE_CURRENT_SOURCE_DIR}/../installer/kagami.ico\"
+")
+endif()
+
+add_executable(kagami WIN32 main.c update_check.c $<$<BOOL:${WIN32}>:${KAGAMI_RC}>)
+target_compile_definitions(kagami PRIVATE AIRCAST_VERSION="${AIRCAST_VERSION}" AIRCAST_SIGNAL="${AIRCAST_SIGNAL}")
 # style.css.h is #included by main.c and lives beside it.
-target_include_directories(aircast-receiver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${DEPS_INCLUDE_DIRS})
-target_link_directories(aircast-receiver PRIVATE ${DEPS_LIBRARY_DIRS})
-target_link_libraries(aircast-receiver PRIVATE ${DEPS_LIBRARIES})
+target_include_directories(kagami PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${DEPS_INCLUDE_DIRS})
+target_link_directories(kagami PRIVATE ${DEPS_LIBRARY_DIRS})
+target_link_libraries(kagami PRIVATE ${DEPS_LIBRARIES})
 if(WIN32)
     # The Wireless Display button opens ms-settings:project, a URI scheme Windows
     # implements as a COM delegate rather than a command line, so the handler
     # calls ShellExecuteW (shell32) with an apartment of its own (ole32). MinGW
     # links shell32 by default and ole32 is not; naming both is what makes that
     # not a question.
-    target_link_libraries(aircast-receiver PRIVATE shell32 ole32)
+    target_link_libraries(kagami PRIVATE shell32 ole32)
 endif()
-target_compile_options(aircast-receiver PRIVATE ${DEPS_CFLAGS_OTHER})
+target_compile_options(kagami PRIVATE ${DEPS_CFLAGS_OTHER})

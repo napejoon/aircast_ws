@@ -9,7 +9,7 @@ python -m pytest -q
 if command -v cmake >/dev/null 2>&1; then
   cmake -S receiver -B receiver/build -DCMAKE_C_FLAGS="-Wall -Werror"
   cmake --build receiver/build
-  ./receiver/build/aircast-receiver --selftest
+  ./receiver/build/kagami --selftest
 else
   echo "SKIP receiver/: cmake not on PATH" >&2
 fi

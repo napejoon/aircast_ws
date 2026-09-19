@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:aircast_sender/signaling.dart';
+import 'package:kagami_sender/signaling.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Drives the client against a real WebSocket, because the only thing worth

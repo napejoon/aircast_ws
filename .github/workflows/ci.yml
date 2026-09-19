@@ -54,7 +54,7 @@ jobs:
       - name: Self-test
         # Version comparison (the rollback defence) and the signature verifier,
         # exercised against a throwaway key rather than described.
-        run: ./receiver/build/aircast-receiver --selftest
+        run: ./receiver/build/kagami --selftest
 
   sender:
     name: sender (Flutter)
@@ -99,7 +99,7 @@ jobs:
         working-directory: sender
         run: |
           flutter build apk --debug
-          mv build/app/outputs/flutter-apk/app-debug.apk Quoise-debug.apk
+          mv build/app/outputs/flutter-apk/app-debug.apk Kagami-debug.apk
       - name: The release path release.yml depends on
         # Built and thrown away. This is where R8, resource shrinking and the
         # AOT compiler run, and where AGP's -unsigned rename — the gate that
@@ -116,8 +116,8 @@ jobs:
         # is one this repository did not write.
         if: github.event_name == 'push'
         with:
-          name: quoise-debug-apk
-          path: sender/Quoise-debug.apk
+          name: kagami-debug-apk
+          path: sender/Kagami-debug.apk
           if-no-files-found: error
 
   paintablesink:
@@ -215,10 +215,10 @@ jobs:
           gst-inspect-1.0 vp8dec > /dev/null
 
       - name: Self-test
-        run: ./build/aircast-receiver.exe --selftest
+        run: ./build/kagami.exe --selftest
 
       - name: Bundle
-        run: bash tools/bundle-windows.sh build dist/aircast
+        run: bash tools/bundle-windows.sh build dist/kagami
 
       - name: Smoke test the bundle
         # No MSYS2 on PATH and a poisoned XDG_DATA_DIRS: this is the machine the
@@ -228,7 +228,7 @@ jobs:
         run: |
           $env:PATH = "C:\Windows\System32;C:\Windows"
           $env:XDG_DATA_DIRS = "C:\nope"
-          cd dist\aircast\bin
+          cd dist\kagami\bin
           foreach ($e in 'gtk4paintablesink','vp8dec','webrtcbin','rtph264depay','h264parse','matroskamux') {
             .\gst-inspect-1.0.exe $e > $null
             if ($LASTEXITCODE -ne 0) { throw "missing element: $e" }
@@ -245,11 +245,11 @@ jobs:
           # The dialogs are an extension, not part of the toolset, and its
           # version has to track wix's own or the build refuses to load it.
           wix extension add -g WixToolset.UI.wixext/5.0.2
-          wix build installer/aircast.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/aircast -o "Quoise-$env:VERSION-x64.msi"
+          wix build installer/kagami.wxs -arch x64 -ext WixToolset.UI.wixext -d Ver=$env:VERSION -d Stage=dist/kagami -o "Kagami-$env:VERSION-x64.msi"
           # wix build runs no ICEs of its own. ICE105 is the dual-purpose-package
           # gate, and whether <Files> harvesting passes it is unsourced — so it
           # is a CI step rather than an assumption.
-          wix msi validate -ice ICE105 "Quoise-$env:VERSION-x64.msi"
+          wix msi validate -ice ICE105 "Kagami-$env:VERSION-x64.msi"
           # A harvest that finds nothing is a warning, not an error, and produces
           # a 35 KB installer that installs a program which cannot start. The
           # bundle is ~170 MB since the plugin prune; anything under 40 MB
@@ -258,7 +258,7 @@ jobs:
           # to be revisited after every prune is one nobody trusts. 40 is
           # far above the 35 KB an empty harvest produces, which is the only
           # failure this number exists to catch.
-          $msi = Get-Item "Quoise-$env:VERSION-x64.msi"
+          $msi = Get-Item "Kagami-$env:VERSION-x64.msi"
           "MSI: {0:N0} MB" -f ($msi.Length / 1MB)
           if ($msi.Length -lt 40MB) { throw "MSI is $($msi.Length) bytes — harvesting found nothing" }
 
@@ -273,10 +273,10 @@ jobs:
         # that the program reads what it wrote, rather than falling back to the
         # per-user cache in %LOCALAPPDATA%.
         run: |
-          ./dist/aircast/bin/aircast-receiver.exe --prebuild-registry
-          test -s dist/aircast/registry.bin
-          GST_DEBUG=GST_REGISTRY:4 ./dist/aircast/bin/aircast-receiver.exe --selftest 2>&1             | grep -q 'reading registry cache:.*aircast.registry\.bin'
-          rm dist/aircast/registry.bin
+          ./dist/kagami/bin/kagami.exe --prebuild-registry
+          test -s dist/kagami/registry.bin
+          GST_DEBUG=GST_REGISTRY:4 ./dist/kagami/bin/kagami.exe --selftest 2>&1             | grep -q 'reading registry cache:.*kagami.registry\.bin'
+          rm dist/kagami/registry.bin
 
       - name: The layout the MSI actually installs
         shell: pwsh
@@ -287,12 +287,12 @@ jobs:
         # always right. An administrative install extracts the real layout
         # without installing anything or needing elevation.
         run: |
-          $msi = (Get-Item "Quoise-$env:VERSION-x64.msi").FullName
+          $msi = (Get-Item "Kagami-$env:VERSION-x64.msi").FullName
           $dir = Join-Path $PWD "extracted"
           $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$msi`"", '/qn', "TARGETDIR=`"$dir`""
           if ($p.ExitCode -ne 0) { throw "administrative install failed with $($p.ExitCode)" }
-          $exe = Get-ChildItem $dir -Recurse -Filter aircast-receiver.exe | Select-Object -First 1
-          if (-not $exe) { throw "the package contains no aircast-receiver.exe" }
+          $exe = Get-ChildItem $dir -Recurse -Filter kagami.exe | Select-Object -First 1
+          if (-not $exe) { throw "the package contains no kagami.exe" }
           # Static imports: the loader takes these from the exe's own directory.
           foreach ($pat in 'libgtk-4-*.dll', 'libgstreamer-1.0-*.dll') {
             if (-not (Get-ChildItem $exe.Directory.FullName -Filter $pat)) {
@@ -310,5 +310,5 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: quoise-msi
-          path: Quoise-*-x64.msi
+          name: kagami-msi
+          path: Kagami-*-x64.msi

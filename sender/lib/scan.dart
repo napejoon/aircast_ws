@@ -95,7 +95,7 @@ class _ScanPageState extends State<ScanPage> {
                     child: Text(
                       _rejected == null
                           ? 'Point this at the code on the desktop'
-                          : 'That is not a Quoise pairing code',
+                          : 'That is not a Kagami pairing code',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 13,

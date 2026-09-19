@@ -1,4 +1,4 @@
-package io.aircast.sender
+package io.kagami.sender
 
 import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity
