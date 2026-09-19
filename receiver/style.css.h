@@ -4,28 +4,32 @@
  * files installed next to it — on Windows especially, "where is style.css"
  * is a worse problem than escaped newlines.
  *
- * Three colours and a ground, and each one has a job:
+ * Kagami is a mirror, and the room it draws is a moon over deep water. Three
+ * colours, each with a job:
  *
- *   #3ddcd0  turquoise, the brand. The wordmark, the focus ring, the live
- *            beacon, the halo under the QR plate. Identity and "this is
- *            working", nothing else.
- *   #ff6b5e  coral, which sits opposite turquoise on the wheel (175 against
- *            5 degrees) and so is the one hue that cannot be mistaken for it
- *            across a room. Recording, dropped, ended.
- *   #f3e3c3  sand. Every line of supporting text used to be a cooler grey than
- *            the one above it, and a card of nothing but cold greys reads as
- *            unfinished rather than calm. Sand is warm, so it separates from
- *            the ground by temperature as well as by lightness.
+ *   #e8edf2  moonlight. The pairing code, and the QR plate it sits under.
+ *            The brightest thing on the screen, because it is the one thing
+ *            somebody has to read from the other side of a room.
+ *   #6fe3c4  the green the sea goes where the light lands. Live: the beacon,
+ *            the focus ring, the halo under the plate. Never text.
+ *   #ffb35c  amber. Recording, and the hotter #ff7a5c for a link that has
+ *            dropped. Warm against a window that is otherwise entirely cold,
+ *            which is what makes it findable without being shrill.
  *
- * The ground is #06100f rather than black: a pure black window behind a card
+ * Amber says "recording" where a red would shout it. That is the one
+ * deliberate risk in this sheet: the mark is easier to miss. It is paired with
+ * a filled button and a running timer for that reason -- the colour is not
+ * carrying the state on its own.
+ *
+ * The ground is #05080f rather than black. A pure black window behind a card
  * that is nearly black gives the card no edge to be found by, and the gradient
- * below gives the room a direction the flat fill never had.
+ * gives the room a direction a flat fill never had.
  */
 
 /* The gradient runs bottom-up, lighter at the top, because the card sits in
  * the upper middle of the window and needs the contrast where it is. */
 "window.room {"
-"  background: linear-gradient(to top, #050c0b 0%, #06100f 45%, #0b1a1b 100%);"
+"  background: linear-gradient(to top, #04060c 0%, #05080f 45%, #0a1424 100%);"
 "}"
 
 /* ------------------------------------------------------------- idle card */
@@ -39,8 +43,8 @@
 ".card {"
 "  padding: 44px 60px 36px 60px;"
 "  border-radius: 28px;"
-"  background: linear-gradient(to bottom, #132523 0%, #0e1e1d 100%);"
-"  border: 1px solid #22403d;"
+"  background: linear-gradient(to bottom, #111f33 0%, #0b1526 100%);"
+"  border: 1px solid #22344f;"
 "  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.05);"
 "}"
 
@@ -53,28 +57,28 @@
  * is to be read across a room: the code below it stays the brightest thing
  * there, because a six-digit code someone is squinting at is not the place to
  * spend contrast on identity. */
-"  color: #3ddcd0;"
+"  color: #6fe3c4;"
 "  margin-bottom: 4px;"
 "}"
 
 /* The instruction, and the only sentence on the card anyone has to read before
- * they know what to do with it. Sand at full strength, one step under the
- * code, well clear of the footnotes at the bottom. */
+ * they know what to do with it. Moonlight dimmed one step: under the code,
+ * clear of the footnotes, and still a colour and not a grey. */
 ".hint {"
 "  font-size: 15px;"
-"  color: #f3e3c3;"
+"  color: #9fb3c8;"
 "  margin-bottom: 22px;"
 "}"
 
 /* The code is the one thing a user has to read across a room, so it is the
- * brightest and the largest thing on it, and warm white rather than the old
- * blue-white — on a warm card a cold white reads as a different material. */
+ * brightest and the largest thing on it. Full moonlight, which on this ground
+ * is the only place the palette spends all of its light. */
 ".code {"
 "  font-size: 72px;"
 "  font-weight: 800;"
 "  letter-spacing: 16px;"
 "  font-feature-settings: 'tnum' 1;"
-"  color: #f7f3ea;"
+"  color: #e8edf2;"
 "  margin: 20px 0 6px 0;"
 /* Letter-spacing is applied after every character including the last, so the
  * label is 16 px wider on the right than the digits are, and a centred label
@@ -84,19 +88,19 @@
 "}"
 
 /* The plate is drawn by the widget, so all this owns is the space around it
- * and the halo under it. The halo is turquoise at a tenth: a white plate on a
- * dark card had a hard cut-out edge that made it read as pasted on rather than
- * lit, and this is the cheapest way to sit it in the same room as everything
- * else. */
+ * and the halo under it. The halo is the sea green at a tenth: a bright plate
+ * on a dark card had a hard cut-out edge that made it read as pasted on rather
+ * than lit, and this is the cheapest way to sit it in the same room as
+ * everything else. */
 ".qr {"
 "  margin: 6px 0 4px 0;"
-"  box-shadow: 0 0 44px rgba(61, 220, 208, 0.10);"
+"  box-shadow: 0 0 44px rgba(111, 227, 196, 0.10);"
 "}"
 
 /* Connection state, and the first of the small lines under the code. */
 ".status {"
 "  font-size: 12px;"
-"  color: #7f9896;"
+"  color: #7b8ea6;"
 "}"
 
 /* The four small grey lines under the code used to be four separate labels of
@@ -107,12 +111,12 @@
 ".footnote {"
 "  margin-top: 20px;"
 "  padding-top: 16px;"
-"  border-top: 1px solid #1c3532;"
+"  border-top: 1px solid #1a2b45;"
 "}"
 
 /* The way out of this window, and the update check beside it: text that can be
- * clicked, not buttons that look like they run the cast. Turquoise on hover
- * only, so the resting card stays a card and not a page of links.
+ * clicked, not buttons that look like they run the cast. The sea green on
+ * hover only, so the resting card stays a card and not a page of links.
  *
  * Not called "link". That is GtkLinkButton's own style class, Adwaita defines
  * button.link with an underline and the accent colour, and a class named after
@@ -124,18 +128,18 @@
 "  border-radius: 8px;"
 "  background: transparent;"
 "  font-size: 12px;"
-"  color: #7f9896;"
+"  color: #7b8ea6;"
 "}"
 
 "button.foot-link:hover {"
-"  background: rgba(61, 220, 208, 0.08);"
-"  color: #3ddcd0;"
+"  background: rgba(111, 227, 196, 0.08);"
+"  color: #6fe3c4;"
 "}"
 
 "button.foot-link:focus-visible {"
-"  outline: 2px solid #3ddcd0;"
+"  outline: 2px solid #6fe3c4;"
 "  outline-offset: -2px;"
-"  color: #3ddcd0;"
+"  color: #6fe3c4;"
 "}"
 
 /* ---------------------------------------------------------- mirrored screen */
@@ -147,8 +151,8 @@
 "  padding: 14px;"
 "  margin: 32px;"
 "  border-radius: 34px;"
-"  background: #04090a;"
-"  border: 1px solid #22403d;"
+"  background: #03060b;"
+"  border: 1px solid #22344f;"
 "  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);"
 "}"
 
@@ -170,13 +174,13 @@
  * than as a card floating in it, so it has one hairline above it and no
  * radius, no shadow and no fill of its own beyond a shade off the room. */
 ".strip {"
-"  background: #081412;"
-"  border-top: 1px solid #1c3532;"
+"  background: #070d18;"
+"  border-top: 1px solid #1a2b45;"
 "}"
 
 ".cell {"
 "  padding: 8px 16px;"
-"  border-right: 1px solid #1c3532;"
+"  border-right: 1px solid #1a2b45;"
 "}"
 
 /* The readings sit in their own box (build_strip), so this is the last of them
@@ -194,14 +198,14 @@
 "}"
 
 ".readings {"
-"  border-left: 1px solid #1c3532;"
+"  border-left: 1px solid #1a2b45;"
 "}"
 
 ".cell-key {"
 "  font-size: 9px;"
 "  font-weight: 700;"
 "  letter-spacing: 2px;"
-"  color: #5a7371;"
+"  color: #5d718c;"
 "}"
 
 /* Monospaced and tabular: these numbers change every second, and in a
@@ -210,12 +214,12 @@
 "  font-family: monospace;"
 "  font-size: 12px;"
 "  font-feature-settings: 'tnum' 1;"
-"  color: #f7f3ea;"
+"  color: #e8edf2;"
 "}"
 
 ".cell-state {"
 "  font-size: 12px;"
-"  color: #f3e3c3;"
+"  color: #9fb3c8;"
 "}"
 
 /* A disc drawn by the box rather than by a glyph, so it does not depend on
@@ -225,7 +229,7 @@
 "  min-width: 8px;"
 "  min-height: 8px;"
 "  border-radius: 999px;"
-"  background: #4a5f60;"
+"  background: #41546e;"
 "}"
 
 /* The halo, not a bigger disc: the strip is 8 px of colour against the frame
@@ -233,23 +237,23 @@
  * the far side of a desk and takes no room the row has to give up, because a
  * box-shadow is drawn outside the layout. */
 ".beacon.live {"
-"  background: #3ddcd0;"
-"  box-shadow: 0 0 0 3px rgba(61, 220, 208, 0.16);"
+"  background: #6fe3c4;"
+"  box-shadow: 0 0 0 3px rgba(111, 227, 196, 0.16);"
 "}"
 
-/* Sand for the state between working and failed. A link that dropped and is
+/* Amber for the state between working and failed. A link that dropped and is
  * being retried is neither, and it had no colour of its own: it borrowed the
  * failure red and said the cast was over a second before it came back. Warm,
- * so it is told apart from the turquoise beside it by hue and not only by
+ * so it is told apart from the green beside it by hue and not only by
  * lightness -- which is what a red-green colourblind viewer has. */
 ".beacon.warn {"
-"  background: #f3c36b;"
-"  box-shadow: 0 0 0 3px rgba(243, 195, 107, 0.16);"
+"  background: #ffb35c;"
+"  box-shadow: 0 0 0 3px rgba(255, 179, 92, 0.16);"
 "}"
 
 ".beacon.bad {"
-"  background: #ff6b5e;"
-"  box-shadow: 0 0 0 3px rgba(255, 107, 94, 0.16);"
+"  background: #ff7a5c;"
+"  box-shadow: 0 0 0 3px rgba(255, 122, 92, 0.16);"
 "}"
 
 /* ---------------------------------------------------------------- toolbar */
@@ -261,8 +265,8 @@
  * the window's frame now rather than an object sitting on the video. */
 ".toolbar {"
 "  padding: 6px 10px;"
-"  background: #081412;"
-"  border-top: 1px solid #1c3532;"
+"  background: #070d18;"
+"  border-top: 1px solid #1a2b45;"
 "}"
 
 "button.tool {"
@@ -272,11 +276,11 @@
 "  border-radius: 999px;"
 "  border: none;"
 "  background: transparent;"
-"  color: #f3e3c3;"
+"  color: #9fb3c8;"
 "}"
 
 "button.tool:hover {"
-"  background: #16302d;"
+"  background: #182842;"
 "  color: #ffffff;"
 "}"
 
@@ -284,32 +288,32 @@
  * The same fill as hover plus an outline, because the fill alone is the state
  * the pointer already uses and would not say which button holds focus. */
 "button.tool:focus-visible {"
-"  background: #16302d;"
+"  background: #182842;"
 "  color: #ffffff;"
-"  outline: 2px solid #3ddcd0;"
+"  outline: 2px solid #6fe3c4;"
 "  outline-offset: -2px;"
 "}"
 
 /* Recording is loud on purpose — a session recorded by accident is the one
- * mistake this program can make that the user cannot undo. Coral filled, with
+ * mistake this program can make that the user cannot undo. Amber filled, with
  * the ground's own colour for the glyph: a dark mark on a bright button is
  * read at a glance as a state, where bright-on-dark is read as one more
  * button. */
 "button.tool.recording {"
-"  background: #ff6b5e;"
-"  color: #06100f;"
+"  background: #ffb35c;"
+"  color: #05080f;"
 "}"
 
 "button.tool.recording:hover {"
-"  background: #ff8578;"
-"  color: #06100f;"
+"  background: #ffc57e;"
+"  color: #05080f;"
 "}"
 
 ".rec-time {"
 "  padding: 0 10px;"
 "  font-size: 13px;"
 "  font-feature-settings: 'tnum' 1;"
-"  color: #ff6b5e;"
+"  color: #ffb35c;"
 "}"
 
 /* The chevron that folds the readings away. Quieter than a toolbar button:
@@ -318,12 +322,12 @@
 "  min-width: 26px;"
 "  min-height: 26px;"
 "  margin: 0 6px;"
-"  color: #5a7371;"
+"  color: #5d718c;"
 "}"
 
 "button.strip-toggle:hover {"
-"  background: #16302d;"
-"  color: #f3e3c3;"
+"  background: #182842;"
+"  color: #9fb3c8;"
 "}"
 
 /* Fullscreen is the mirror and nothing else: the frame that makes this read as

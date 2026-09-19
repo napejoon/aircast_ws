@@ -31,12 +31,12 @@
          generates is derived from the project name, so a relative ".MainActivity"
          would resolve to a class that does not exist. -->
     <application
-        android:label="Quoise"
+        android:label="Kagami"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
         <activity
-            android:name="io.aircast.sender.MainActivity"
+            android:name="io.kagami.sender.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/LaunchTheme"
@@ -55,7 +55,7 @@
         <!-- Android 14+ refuses getMediaProjection() unless this service is
              already in the foreground with this exact type. -->
         <service
-            android:name="io.aircast.sender.UsbCastService"
+            android:name="io.kagami.sender.UsbCastService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 

@@ -1,4 +1,4 @@
-package io.aircast.sender
+package io.kagami.sender
 
 import android.app.Activity
 import android.content.Context
@@ -24,7 +24,7 @@ class UsbCastPlugin(
     messenger: io.flutter.plugin.common.BinaryMessenger,
 ) : MethodChannel.MethodCallHandler, PluginRegistry.ActivityResultListener {
 
-    private val channel = MethodChannel(messenger, "io.aircast.sender/usb").also { c ->
+    private val channel = MethodChannel(messenger, "io.kagami.sender/usb").also { c ->
         c.setMethodCallHandler(this)
         // The service is the only thing that hears the platform take the
         // capture away. onStop is delivered on the main thread, which is the

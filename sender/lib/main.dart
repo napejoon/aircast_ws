@@ -55,7 +55,7 @@ class AircastApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Quoise',
+        title: 'Kagami',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           useMaterial3: true,
@@ -202,7 +202,7 @@ class _SenderPageState extends State<SenderPage> {
       // Into logcat as well as onto the screen: a status line the user does not
       // read is a failure nobody can diagnose, and three of these were found by
       // adb, not by eye.
-      debugPrint('aircast: session failed: $e');
+      debugPrint('kagami: session failed: $e');
       debugPrint('$st');
       await _stop(status: '$e');
     }

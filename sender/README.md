@@ -1,4 +1,4 @@
-# Quoise sender
+# Kagami sender
 
 Flutter screen sender. The UI is the other half of the receiver's: same dark
 palette, and the six digits the desktop shows in large type are typed back in
@@ -57,7 +57,7 @@ at a different relay means building another APK. The Actions tab has a
 It produces a debug APK, because a release build is unsigned by design and
 Android will not install it.
 
-The manifest names `io.aircast.sender.MainActivity` and `.UsbCastService` in
+The manifest names `io.kagami.sender.MainActivity` and `.UsbCastService` in
 full, because the Gradle namespace `flutter create` derives from the project
 name is not the package these Kotlin files declare.
 

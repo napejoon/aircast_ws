@@ -174,7 +174,7 @@ class CastSession {
       }
       await sender.setParameters(params);
     }
-    debugPrint('aircast: cap $_fpsCap -> $wantFps fps, floor '
+    debugPrint('kagami: cap $_fpsCap -> $wantFps fps, floor '
         '${_floor ~/ 1000} -> ${wantFloor ~/ 1000} kbit/s '
         '(estimate ${bwe ~/ 1000} kbit/s)');
     _fpsCap = wantFps;
@@ -269,9 +269,9 @@ class CastSession {
       if (!await Helper.requestCapturePermission()) {
         throw Exception('Screen sharing was declined');
       }
-      debugPrint('aircast: consent granted');
+      debugPrint('kagami: consent granted');
       await UsbCast.holdForeground();
-      debugPrint('aircast: foreground service up');
+      debugPrint('kagami: foreground service up');
     }
 
     // iOS: 'broadcast' selects the Broadcast Upload Extension, which is the
@@ -283,10 +283,10 @@ class CastSession {
       'audio': false,
     });
 
-    debugPrint('aircast: capture started, ${_stream!.getVideoTracks().length} video track(s)');
+    debugPrint('kagami: capture started, ${_stream!.getVideoTracks().length} video track(s)');
     final pc = await createPeerConnection(turn.toConfiguration(relayOnly: relayOnly));
     _pc = pc;
-    debugPrint('aircast: peer connection created');
+    debugPrint('kagami: peer connection created');
 
     for (final track in _stream!.getVideoTracks()) {
       await pc.addTrack(track, _stream!);
@@ -319,7 +319,7 @@ class CastSession {
         // getStats throws on a connection closed between the tick and the
         // call. Nothing here is worth ending a cast over, and the UI simply
         // keeps the last reading until the next tick replaces it.
-        debugPrint('aircast: stats read failed: $e');
+        debugPrint('kagami: stats read failed: $e');
       }
     });
 
@@ -359,7 +359,7 @@ class CastSession {
         // escaping here would be an uncaught async error rather than something
         // main.dart could put on the status line. What the user sees is the
         // connection state, which is already wired to onState.
-        debugPrint('aircast: the re-offer failed: $e');
+        debugPrint('kagami: the re-offer failed: $e');
       }
     };
   }

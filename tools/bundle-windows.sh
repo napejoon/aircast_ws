@@ -18,14 +18,14 @@ set -euo pipefail
 
 PREFIX=/ucrt64
 BUILD=${1:-build}
-OUT=${2:-dist/aircast}
+OUT=${2:-dist/kagami}
 
 rm -rf "$OUT"
 mkdir -p "$OUT"/bin "$OUT"/lib/gstreamer-1.0 "$OUT"/lib/gio/modules \
          "$OUT"/libexec/gstreamer-1.0 "$OUT"/share/glib-2.0/schemas \
          "$OUT"/share/icons
 
-cp "$BUILD/aircast-receiver.exe" "$OUT/bin/"
+cp "$BUILD/kagami.exe" "$OUT/bin/"
 # Shipped for the CI smoke test, and for asking a user's machine what it has.
 cp "$PREFIX/bin/gst-inspect-1.0.exe" "$OUT/bin/"
 cp "$PREFIX/libexec/gstreamer-1.0/gst-plugin-scanner.exe" "$OUT/libexec/gstreamer-1.0/"
@@ -158,6 +158,12 @@ gio-querymodules "$OUT/lib/gio/modules" || true
 # be the same bug again.
 cp -r "$PREFIX/share/icons/Adwaita" "$OUT/share/icons/"
 cp -r "$PREFIX/share/icons/hicolor" "$OUT/share/icons/" 2>/dev/null || true
+
+# Ours, into the same tree: gtk_window_set_icon_name("kagami") is a theme
+# lookup, and the theme is this directory. Not an error if it is missing from a
+# tree built by hand -- the window then has no icon, which is what it had
+# before there was one to give it.
+install -Dm644 "$(dirname "$0")/../receiver/icons/kagami-256.png"   "$OUT/share/icons/hicolor/256x256/apps/kagami.png"
 
 # And an index for it, for the same reason gio-querymodules runs above: with
 # no icon-theme.cache GTK walks the theme itself, and Adwaita is thousands of

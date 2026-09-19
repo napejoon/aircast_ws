@@ -15,7 +15,7 @@
   "https://github.com/napejoon/aircast_ws/releases/latest/download/aircast-update.json"
 #define SIGNATURE_URL MANIFEST_URL ".minisig"
 #define TAG_URL_FMT "https://github.com/napejoon/aircast_ws/releases/tag/v%u.%u.%u"
-#define PRODUCT "aircast-receiver"
+#define PRODUCT "kagami"
 
 #define MANIFEST_MAX 8192
 #define SIGNATURE_MAX 4096
@@ -287,7 +287,7 @@ check_thread (GTask *task, gpointer source, gpointer task_data, GCancellable *ca
 
   SoupSession *session = soup_session_new ();
   soup_session_set_timeout (session, IO_TIMEOUT_S);
-  soup_session_set_user_agent (session, "aircast-receiver/" AIRCAST_VERSION " ");
+  soup_session_set_user_agent (session, "kagami/" AIRCAST_VERSION " ");
 
   GBytes *manifest = fetch (session, MANIFEST_URL, MANIFEST_MAX, cancellable);
   GBytes *signature = manifest
@@ -505,7 +505,7 @@ aircast_update_selftest (void)
   crypto_sign_keypair (pk, sk);
 
   const char *manifest =
-      "{\"schema\":1,\"product\":\"aircast-receiver\",\"version\":\"1.4.0\"}";
+      "{\"schema\":1,\"product\":\"kagami\",\"version\":\"1.4.0\"}";
   gsize mlen = strlen (manifest);
   gchar *sig = make_sig (manifest, mlen, sk, "ED");
   gsize slen = strlen (sig);

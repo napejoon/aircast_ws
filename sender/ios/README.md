@@ -22,14 +22,14 @@ be added by hand after the scaffold exists.
    `AircastBroadcast`, with the identical identifier:
 
    ```
-   group.io.aircast.sender
+   group.io.kagami.sender
    ```
 
 3. **`Runner/Info.plist`** gets the same string:
 
    ```xml
    <key>RTCAppGroupIdentifier</key>
-   <string>group.io.aircast.sender</string>
+   <string>group.io.kagami.sender</string>
    ```
 
 4. **Copy five files into the extension target**, from LiveKit's Flutter example
@@ -47,7 +47,7 @@ be added by hand after the scaffold exists.
    the commit message.
 
 5. In the copied `SampleHandler.swift`, set `appGroupIdentifier` to
-   `group.io.aircast.sender`.
+   `group.io.kagami.sender`.
 
 Then: run the app, start mirroring, and pick **aircast** from the screen-record
 long-press in Control Center.

@@ -1,8 +1,13 @@
-/* Quoise — GTK4 window around a GStreamer webrtcbin.
+/* Kagami — GTK4 window around a GStreamer webrtcbin.
  *
- * The binary, the GApplication id and the update manifest's product key all
- * still say aircast-receiver: those are identifiers other things are matched
- * against, and renaming them would orphan every copy already installed.
+ * The binary, the GApplication id, the pairing scheme and the update
+ * manifest's product key were renamed with the program, which orphans every
+ * copy already installed: a phone running the old sender scans a kagami://
+ * code it does not recognise, and an old manifest names a product this build
+ * is not. That was the deliberate price of one name instead of two. The
+ * signalling host, the update manifest's own filename and the aircast_ C
+ * prefix are not the program's name -- they are a deployed domain, a release
+ * asset and an internal API -- and none of them moved.
  *
  * Shape of the UI, which is deliberately Reflector-like: a dark room with
  * nothing in it but the pairing code until a phone connects, then the mirrored
@@ -1069,7 +1074,7 @@ build_pipeline (App *self, JsonObject *turn)
     return FALSE;
   }
 
-  self->pipeline = gst_pipeline_new ("aircast-receiver");
+  self->pipeline = gst_pipeline_new ("kagami");
   /* A sink inside a bin does not post EOS to the pipeline bus: a pipeline
    * posts one EOS, and only once every sink it holds has seen it. The record
    * branch is a bin with a filesink in it, and its EOS is the one moment worth
@@ -2027,7 +2032,7 @@ on_wireless_display_clicked (GtkButton *button, App *self)
  * this process.
  *
  * The payload carries the signalling URL as well as the code --
- * aircast://pair?c=<code>&s=<url> -- which is the whole reason it exists. A QR
+ * kagami://pair?c=<code>&s=<url> -- which is the whole reason it exists. A QR
  * of the six digits alone would save four seconds of typing; carrying the URL
  * is what lets one APK talk to whichever server the person in front of this
  * screen is running, instead of the one it was compiled against.
@@ -2058,7 +2063,7 @@ draw_pairing_qr (GtkDrawingArea *area, cairo_t *cr, int width, int height,
   double ox = (width - side) / 2.0;
   double oy = (height - side) / 2.0;
 
-  /* #f7efe1, and rounded. A pure white square with hard corners was the
+  /* #eef2f6, and rounded. A pure white square with hard corners was the
    * brightest and squarest thing on a warm, round-cornered card, so it read as
    * pasted on rather than printed -- and it out-shouted the six digits, which
    * are what someone across the room is actually there to read. The radius is
@@ -2071,12 +2076,12 @@ draw_pairing_qr (GtkDrawingArea *area, cairo_t *cr, int width, int height,
   cairo_arc (cr, ox + r,        oy + side - r, r, G_PI / 2,  G_PI);
   cairo_arc (cr, ox + r,        oy + r,        r, G_PI,      3 * G_PI / 2);
   cairo_close_path (cr);
-  cairo_set_source_rgb (cr, 0.969, 0.937, 0.882);
+  cairo_set_source_rgb (cr, 0.933, 0.949, 0.965);
   cairo_fill (cr);
 
-  /* #06100f, the window behind the card: the code reads as a hole cut in the
+  /* #05080f, the window behind the card: the code reads as a hole cut in the
    * screen rather than as ink printed on it. */
-  cairo_set_source_rgb (cr, 0.024, 0.063, 0.059);
+  cairo_set_source_rgb (cr, 0.020, 0.031, 0.059);
   for (int y = 0; y < qr->width; y++) {
     for (int x = 0; x < qr->width; x++) {
       if (qr->data[y * qr->width + x] & 1)
@@ -2101,7 +2106,7 @@ build_pairing_qr (App *self)
    * a query value. */
   gchar *escaped = g_uri_escape_string (self->signal_url ? self->signal_url : "",
       NULL, FALSE);
-  gchar *payload = g_strdup_printf ("aircast://pair?c=%s&s=%s", self->code, escaped);
+  gchar *payload = g_strdup_printf ("kagami://pair?c=%s&s=%s", self->code, escaped);
   g_free (escaped);
 
   /* Level M: a quarter of the code can be lost and still read, which is the
@@ -2131,10 +2136,10 @@ build_idle_page (App *self)
   gtk_widget_set_valign (box, GTK_ALIGN_CENTER);
   gtk_widget_add_css_class (box, "card");
 
-  GtkWidget *title = gtk_label_new ("Quoise");
+  GtkWidget *title = gtk_label_new ("Kagami");
   gtk_widget_add_css_class (title, "title");
 
-  GtkWidget *hint = gtk_label_new ("Scan this with Quoise on your phone, or type the code");
+  GtkWidget *hint = gtk_label_new ("Scan this with Kagami on your phone, or type the code");
   gtk_widget_add_css_class (hint, "hint");
 
   /* Shown 482 913 rather than 482913. Six digits with nothing to break them
@@ -2676,7 +2681,13 @@ activate (GtkApplication *app, gpointer user_data)
   g_object_set (gtk_settings_get_default (), "gtk-label-select-on-focus", FALSE, NULL);
 
   self->window = gtk_application_window_new (app);
-  gtk_window_set_title (GTK_WINDOW (self->window), "Quoise");
+  gtk_window_set_title (GTK_WINDOW (self->window), "Kagami");
+  /* By name, not by file: GTK looks this up in the icon theme, which on
+   * Windows is the hicolor tree tools/bundle-windows.sh lays down beside the
+   * exe and indexes. The exe's own resource icon is what Explorer and the
+   * taskbar read; this is the one GTK draws inside the window, and a build
+   * with no theme installed simply has no icon rather than an error. */
+  gtk_window_set_icon_name (GTK_WINDOW (self->window), "kagami");
   gtk_window_set_default_size (GTK_WINDOW (self->window), 1100, 760);
   gtk_widget_add_css_class (self->window, "room");
 
@@ -2864,7 +2875,7 @@ main (int argc, char *argv[])
    * Two cases, and the first is why this is not simply a log file. Started
    * from a terminal, AttachConsole borrows the parent's console and the output
    * appears there exactly as it did before the subsystem changed, so
-   * `aircast-receiver --help` and a debugging run still work. Started from the
+   * `kagami --help` and a debugging run still work. Started from the
    * shell or a shortcut there is no parent console, and stderr goes to
    * receiver.log under the user's data directory, truncated each run so it is
    * the last session rather than a year of them. stdout is left alone in that
@@ -2896,7 +2907,7 @@ main (int argc, char *argv[])
   }
 #endif
 
-  GOptionContext *ctx = g_option_context_new ("- Quoise");
+  GOptionContext *ctx = g_option_context_new ("- Kagami");
   g_option_context_add_main_entries (ctx, entries, NULL);
   g_option_context_add_group (ctx, gst_init_get_option_group ());
   GError *error = NULL;
@@ -3042,7 +3053,7 @@ main (int argc, char *argv[])
   gtk_init ();
   mark ("gtk_init done");
 
-  self.app = gtk_application_new ("io.aircast.receiver", G_APPLICATION_DEFAULT_FLAGS);
+  self.app = gtk_application_new ("io.kagami.receiver", G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect (self.app, "activate", G_CALLBACK (activate), &self);
   g_signal_connect (self.app, "shutdown", G_CALLBACK (shutdown_app), &self);
   /* GtkApplication would otherwise try to parse our own arguments again. */

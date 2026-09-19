@@ -1,4 +1,4 @@
-package io.aircast.sender
+package io.kagami.sender
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -599,9 +599,9 @@ class UsbCastService : Service() {
     }
 
     companion object {
-        const val ACTION_START = "io.aircast.sender.USB_START"
-        const val ACTION_STOP = "io.aircast.sender.USB_STOP"
-        const val ACTION_HOLD = "io.aircast.sender.HOLD_FOREGROUND"
+        const val ACTION_START = "io.kagami.sender.USB_START"
+        const val ACTION_STOP = "io.kagami.sender.USB_STOP"
+        const val ACTION_HOLD = "io.kagami.sender.HOLD_FOREGROUND"
 
         /** Set by UsbCastPlugin before it starts ACTION_HOLD; fired once startForeground has run. */
         @Volatile

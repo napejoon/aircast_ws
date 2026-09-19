@@ -1,4 +1,4 @@
-# Quoise receiver
+# Kagami receiver
 
 A GTK4 window around a GStreamer `webrtcbin`. Dark room, the pairing code until
 a phone connects, then the mirrored screen in a device bezel with a toolbar that
@@ -65,7 +65,7 @@ Configure with `PKG_CONFIG_PATH` pointing at both `lib/pkgconfig` directories.
 ## Windows
 
 The Windows build is an MSYS2 UCRT64 build bundled into a self-contained tree
-and packaged as an MSI — `tools/bundle-windows.sh`, `installer/aircast.wxs`, and
+and packaged as an MSI — `tools/bundle-windows.sh`, `installer/kagami.wxs`, and
 the `windows` job in `.github/workflows/ci.yml`, which is where those are
 actually exercised. `gtk4paintablesink` needs no cargo build there:
 `mingw-w64-ucrt-x86_64-gst-plugins-rs` ships it.
@@ -136,7 +136,7 @@ build's key, which is the last step of the release ceremony.
 
 ```bash
 cmake -B build && cmake --build build
-./build/aircast-receiver
+./build/kagami
 ```
 
 The signalling URL is compiled in — `AIRCAST_SIGNAL`, default

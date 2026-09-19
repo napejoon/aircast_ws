@@ -1,4 +1,4 @@
-# Quoise
+# Kagami
 
 Said like the end of *turquoise*: **kwoyz**. The window is that colour.
 
@@ -59,7 +59,7 @@ AIRCAST_TURN_SECRET=dev AIRCAST_TURN_URLS=turn:127.0.0.1:3478 python server/airc
 
 # 2. receiver — prints the pairing code to type into the phone
 cmake -S receiver -B receiver/build && cmake --build receiver/build
-./receiver/build/aircast-receiver --signal ws://127.0.0.1:8443/ws --record cast.mkv
+./receiver/build/kagami --signal ws://127.0.0.1:8443/ws --record cast.mkv
 
 # 3. sender
 bash tools/scaffold-sender.sh && cd sender
@@ -83,7 +83,7 @@ still offers host candidates simply finds nothing to pair with.
 # the signalling server has to be reachable from the phone, not just loopback
 AIRCAST_BIND=0.0.0.0 AIRCAST_TURN_SECRET=dev AIRCAST_TURN_URLS=turn:127.0.0.1:3478 python server/aircast_signal.py
 
-./receiver/build/aircast-receiver --signal ws://<desktop-lan-ip>:8443 --insecure
+./receiver/build/kagami --signal ws://<desktop-lan-ip>:8443 --insecure
 
 flutter run --dart-define=AIRCAST_SIGNAL=ws://<desktop-lan-ip>:8443
 ```

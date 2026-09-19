@@ -12,7 +12,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../sender"
 
-flutter create --platforms=android,ios --org io.aircast --project-name aircast_sender .
+flutter create --platforms=android,ios --org io.kagami --project-name kagami_sender .
 # The scaffold drops in a widget test for a MyApp that is not ours.
 rm -f test/widget_test.dart
 

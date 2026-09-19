@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 ///
 /// Android only; the methods throw MissingPluginException elsewhere.
 class UsbCast {
-  static const _channel = MethodChannel('io.aircast.sender/usb');
+  static const _channel = MethodChannel('io.kagami.sender/usb');
 
   /// Asks for POST_NOTIFICATIONS. The manifest has declared it since the
   /// foreground service existed and nothing ever requested it, so on Android 13
