@@ -108,6 +108,7 @@ typedef struct {
   GtkWidget *window;
   GtkWidget *stack;
   GtkWidget *picture;
+  GtkWidget *frame;             /* the aspect frame around the bezel */
   GtkWidget *code_label;
   GtkWidget *status_label;
   GtkWidget *record_button;
@@ -1553,6 +1554,20 @@ typedef struct {
  * will hand out its paintable — the "paintable" property getter errors on any
  * other thread, and on_pad_added runs on a streaming one. Fetching it here
  * rather than there is the difference between a live picture and a blank one. */
+/* The only thing that moves the frame's ratio now, and it runs when the
+ * paintable says its size changed rather than on every frame: a rotation on
+ * the tablet, or a source that comes up at one size and settles at another.
+ * A paintable with no intrinsic ratio yet (nothing decoded) reports 0, and the
+ * frame keeps whatever it had. */
+static void
+follow_paintable_ratio (GdkPaintable *paintable, gpointer data)
+{
+  App *self = data;
+  double ratio = gdk_paintable_get_intrinsic_aspect_ratio (paintable);
+  if (ratio > 0 && self->frame)
+    gtk_aspect_frame_set_ratio (GTK_ASPECT_FRAME (self->frame), (float) ratio);
+}
+
 static gboolean
 attach_paintable (gpointer data)
 {
@@ -1563,6 +1578,11 @@ attach_paintable (gpointer data)
   g_object_get (handover->sink, "paintable", &paintable, NULL);
   if (paintable) {
     gtk_picture_set_paintable (GTK_PICTURE (self->picture), paintable);
+    follow_paintable_ratio (paintable, self);
+    /* _object, so the handler dies with the window rather than with a
+     * paintable the picture is still holding a reference to. */
+    g_signal_connect_object (paintable, "invalidate-size",
+        G_CALLBACK (follow_paintable_ratio), self, 0);
     g_object_unref (paintable);
     show_page (self, "live");
     set_strip_state (self, "live", "Mirroring");
@@ -2273,17 +2293,38 @@ build_live_page (App *self)
    * reads smaller than the source again, this frame is upscaling and should
    * come out together with whatever let the resolution drop.
    *
-   * obey_child TRUE rather than a ratio of our own: the source aspect is the
-   * tablet's and changes when it is rotated, and reading it from the child
-   * costs no signal handler on the paintable. The ratio it reads includes the
-   * bezel's 94 px of chrome per axis, so it is a couple of percent wide; that
-   * shows as a hairline of letterbox inside the bezel, black on black against
-   * .bezel's #05070a and .screen's #000000. */
-  GtkWidget *frame = gtk_aspect_frame_new (0.5f, 0.5f, 1.0f, TRUE);
-  gtk_widget_set_hexpand (frame, TRUE);
-  gtk_widget_set_vexpand (frame, TRUE);
-  gtk_aspect_frame_set_child (GTK_ASPECT_FRAME (frame), bezel);
-  return frame;
+   * The ratio used to be read from the child, for one signal handler less.
+   * That is the bug below. */
+
+  /* obey_child FALSE, and this is the fix for a bug that cost a cast to find.
+   *
+   * It read the ratio from the child, which is the bezel around a GtkPicture
+   * whose paintable is gtk4paintablesink's -- and that paintable's size is not
+   * a constant. Every size it announces re-measures the frame, the frame
+   * re-allocates the box, and the box re-measures the child, which is a loop
+   * with no fixed point. GTK says so and then gives up:
+   *
+   *   Gdk-WARNING: gdk-frame-clock: layout continuously requested,
+   *                giving up after 4 tries
+   *
+   * What it leaves behind is whatever the fourth try allocated. On a 1936x1048
+   * window mirroring a 2304x1440 tablet that was a picture taller than the
+   * window, with the toolbar and the connection strip pushed off the bottom
+   * edge -- the strip half-cut, PATH and BUFFER and PICTURE and LOSS sliced
+   * through the middle. The window also refused every resize down to 700x700,
+   * because a layout that never settles never lets go of the size it is on.
+   *
+   * So the ratio is set from the paintable instead (attach_paintable), which
+   * asks it once when it changes rather than letting the answer come back
+   * through the layout. The bezel's 94 px of chrome is no longer inside the
+   * ratio, so the video sits a hairline short of the frame it is centred in --
+   * black on black, and the same order of error the old comment accepted in
+   * the other direction. */
+  self->frame = gtk_aspect_frame_new (0.5f, 0.5f, 16.0f / 9.0f, FALSE);
+  gtk_widget_set_hexpand (self->frame, TRUE);
+  gtk_widget_set_vexpand (self->frame, TRUE);
+  gtk_aspect_frame_set_child (GTK_ASPECT_FRAME (self->frame), bezel);
+  return self->frame;
 }
 
 /* The readings are PATH, BUFFER, PICTURE and LOSS, and every one of them is an
