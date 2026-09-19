@@ -1579,10 +1579,15 @@ attach_paintable (gpointer data)
   if (paintable) {
     gtk_picture_set_paintable (GTK_PICTURE (self->picture), paintable);
     follow_paintable_ratio (paintable, self);
-    /* _object, so the handler dies with the window rather than with a
-     * paintable the picture is still holding a reference to. */
-    g_signal_connect_object (paintable, "invalidate-size",
-        G_CALLBACK (follow_paintable_ratio), self, 0);
+    /* Plain connect, and deliberately. g_signal_connect_object was here for
+     * one build and it killed the process the instant a cast came up: its
+     * fourth argument has to be a GObject to weak-ref, App is a plain struct,
+     * and the weak-ref went into whatever that pointer happened to be. The
+     * handler needs no disconnect anyway -- it dies with the paintable, which
+     * the picture drops when the next session hands it another one, and App
+     * outlives every paintable in the run. */
+    g_signal_connect (paintable, "invalidate-size",
+        G_CALLBACK (follow_paintable_ratio), self);
     g_object_unref (paintable);
     show_page (self, "live");
     set_strip_state (self, "live", "Mirroring");
