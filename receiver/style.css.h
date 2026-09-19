@@ -53,11 +53,12 @@
 "  font-weight: 700;"
 "  letter-spacing: 5px;"
 "  text-transform: uppercase;"
-/* The wordmark is the one place the brand colour belongs on a card whose job
- * is to be read across a room: the code below it stays the brightest thing
- * there, because a six-digit code someone is squinting at is not the place to
- * spend contrast on identity. */
-"  color: #6fe3c4;"
+/* Dimmed moonlight, not the green. The green means live, and the head of this
+ * file says so -- then the rename swept every turquoise into it, wordmark
+ * included, and the card came back with its brightest colour spent on saying
+ * its own name. A six-digit code someone is squinting at across a room is not
+ * the place to spend contrast on identity, and neither is the word above it. */
+"  color: #9fb3c8;"
 "  margin-bottom: 4px;"
 "}"
 

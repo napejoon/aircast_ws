@@ -19,34 +19,37 @@ const _defaultSignalUrl =
     String.fromEnvironment('AIRCAST_SIGNAL', defaultValue: 'wss://aircast.cloud/ws');
 
 /// Same palette as the receiver's window (receiver/style.css.h), so the two
-/// halves of one product look like one product.
-const _room = Color(0xFF0B1214);
-const _card = Color(0xFF131B1D);
-const _edge = Color(0xFF1F2B2D);
-const _ink = Color(0xFFEFF7F7);
-const _muted = Color(0xFF6D8384);
+/// halves of one product look like one product. Kagami is a mirror, and the
+/// room both halves draw is a moon over deep water.
+const _room = Color(0xFF05080F);
+const _card = Color(0xFF0D1726);
+const _edge = Color(0xFF1A2B45);
+const _ink = Color(0xFFE8EDF2);
+const _muted = Color(0xFF7B8EA6);
 
-/// Turquoise. The one saturated colour in the palette, so it is spent on the
-/// wordmark and on the dot that answers "am I still sharing my screen?" and on
-/// nothing else.
-const _brand = Color(0xFF3DDCD0);
+/// The wordmark, and every other place the product says its own name. Dimmed
+/// moonlight rather than a saturated colour: the brightest thing on a phone
+/// held at arm's length should be the state of the cast, not the brand.
+const _brand = Color(0xFF9FB3C8);
 
-/// A live connection is the brand colour rather than a green of its own: two
-/// near-identical greens on one card read as two states, and there is only one.
-const _live = _brand;
-const _alarm = Color(0xFFFF6B5E);
+/// The green the sea goes where the light lands, and the only saturated colour
+/// on this screen. It answers "am I still sharing my screen?" and nothing
+/// else. It was the brand colour when the brand was turquoise, which is
+/// exactly why it is not any more: a wordmark and a live dot in one colour
+/// means the card is brightest when it has nothing to say.
+const _live = Color(0xFF6FE3C4);
+const _alarm = Color(0xFFFF7A5C);
 
 /// Amber, for the state between working and failed: reconnecting, waiting,
 /// degraded. It had no colour of its own before, so a link dropping looked
-/// either fine or fatal and never like what it is. Sits opposite the
-/// turquoise on the wheel, which is what makes it read as a change of state
-/// rather than a shade of the same one.
-const _caution = Color(0xFFFFC857);
+/// either fine or fatal and never like what it is. Warm, on a window that is
+/// otherwise entirely cold, which is what makes it findable without shouting.
+const _caution = Color(0xFFFFB35C);
 
-/// Indigo, for the second way to do the same thing -- the USB path beside the
-/// network one. Between the turquoise and the coral on the wheel, so it is
-/// visibly not either of them and competes with neither.
-const _accent = Color(0xFF9D8DF7);
+/// Violet, for the second way to do the same thing -- the USB path beside the
+/// network one. Not the indigo it used to be: on this ground an indigo is the
+/// ground. Far enough from the green and the amber to be neither.
+const _accent = Color(0xFFB693FF);
 
 void main() => runApp(const AircastApp());
 
@@ -345,7 +348,12 @@ class _SenderPageState extends State<SenderPage> {
                   _PillButton(
                     label: _busy ? 'Connecting…' : 'Start mirroring',
                     onPressed: _busy ? null : _castOverNetwork,
-                    background: _brand,
+                    // The green, because this is the button that makes the dot
+                    // green: the one action on the screen wears the colour of
+                    // the state it creates. The wordmark above it does not --
+                    // it is dimmed moonlight now, which is what leaves this the
+                    // only saturated thing anyone has to find.
+                    background: _live,
                     foreground: _room,
                   ),
                   if (Platform.isAndroid) ...[
@@ -361,8 +369,8 @@ class _SenderPageState extends State<SenderPage> {
                       label: 'Mirror over USB cable',
                       onPressed: _castOverUsb,
                       background: _card,
-                      // Indigo: the second way to do the same thing. It reads as
-                      // a choice beside the turquoise button rather than as a
+                      // Violet: the second way to do the same thing. It reads
+                      // as a choice beside the green button rather than as a
                       // lesser version of it, which grey on grey did.
                       foreground: _accent,
                     ),
