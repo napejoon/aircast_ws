@@ -72,7 +72,7 @@ class _ScanPageState extends State<ScanPage> {
                   width: 240,
                   height: 240,
                   decoration: BoxDecoration(
-                    border: Border.all(color: const Color(0xFF3DDCD0), width: 2),
+                    border: Border.all(color: const Color(0xFF6FE3C4), width: 2),
                     borderRadius: BorderRadius.circular(18),
                   ),
                 ),
@@ -101,7 +101,7 @@ class _ScanPageState extends State<ScanPage> {
                         fontSize: 13,
                         color: _rejected == null
                             ? Colors.white70
-                            : const Color(0xFFFFC857),
+                            : const Color(0xFFFFB35C),
                       ),
                     ),
                   ),
