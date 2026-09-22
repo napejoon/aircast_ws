@@ -607,11 +607,40 @@ on_fullscreen_clicked (GtkButton *button, App *self)
   }
 }
 
-/* Deferred out of notify::fullscreened; see the call site for why. */
+/* Deferred out of notify::fullscreened; see the call site for why.
+ *
+ * Unmaximize first, and this is the fix for a window that came back from
+ * fullscreen with its bottom under the taskbar. GTK still holds the maximized
+ * state flag across the fullscreen, so gtk_window_maximize on its own is a
+ * no-op: nothing recomputes the geometry, and what is left is a window the
+ * size of the fullscreen -- 2576x1431 measured on a 2560x1440 screen whose
+ * work area ends at 1392. The 39 px hanging past it is the connection strip,
+ * which is what the user sees sliced off along the taskbar.
+ *
+ * Dropping the flag first makes the maximize real, and Windows recomputes from
+ * the work area rather than from the size the window happened to have.
+ *
+ * The size is logged because the last two bugs on this path were found by
+ * measuring the window from outside the process, which is a slow way to learn
+ * something the program already knows. */
+static gboolean
+remaximize (gpointer window)
+{
+  gtk_window_maximize (GTK_WINDOW (window));
+  g_message ("left fullscreen: window is %dx%d",
+      gtk_widget_get_width (GTK_WIDGET (window)),
+      gtk_widget_get_height (GTK_WIDGET (window)));
+  return G_SOURCE_REMOVE;
+}
+
 static gboolean
 restore_maximized (gpointer window)
 {
-  gtk_window_maximize (GTK_WINDOW (window));
+  gtk_window_unmaximize (GTK_WINDOW (window));
+  /* One more turn, for the same reason this one is deferred: two window state
+   * changes in a row is what crashed the win32 backend before. */
+  g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, remaximize,
+      g_object_ref (window), g_object_unref);
   return G_SOURCE_REMOVE;
 }
 
