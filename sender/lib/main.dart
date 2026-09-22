@@ -394,7 +394,7 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) => Row(
         children: [
           const Text(
-            'QUOISE',
+            'KAGAMI',
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,

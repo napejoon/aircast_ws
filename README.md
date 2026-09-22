@@ -1,6 +1,7 @@
 # Kagami
 
-Said like the end of *turquoise*: **kwoyz**. The window is that colour.
+Japanese for mirror: **kah-GAH-mee** (鏡). The window is a moon over deep
+water, which is what a mirror in the dark gives back.
 
 [![CI](https://github.com/napejoon/aircast_ws/actions/workflows/ci.yml/badge.svg)](https://github.com/napejoon/aircast_ws/actions/workflows/ci.yml)
 
