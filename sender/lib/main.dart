@@ -292,91 +292,105 @@ class _SenderPageState extends State<SenderPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
         body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-            child: Column(
-              children: [
-                _Header(
-                  casting: _casting,
-                  connected: _connected,
-                  onSettings: () => setState(() => _settingsOpen = !_settingsOpen),
-                ),
-                if (_settingsOpen) _ServerField(controller: _url, enabled: !_casting),
-                // Centred while there is room and scrollable when there is not.
-                // The card is a fixed height and the keyboard takes about half
-                // the screen, so a plain Center had nowhere to put it and Flutter
-                // drew BOTTOM OVERFLOWED BY 36 PIXELS across the bottom of the
-                // one card the user is trying to type into.
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => SingleChildScrollView(
-                      child: ConstrainedBox(
-                        constraints:
-                            BoxConstraints(minHeight: constraints.maxHeight),
-                        child: Center(
-                          child: _casting
-                              ? _CastingCard(
-                                  code: _code.text,
-                                  usb: _usb,
-                                  connected: _connected,
-                                  stats: _stats,
-                                )
-                              : _CodeCard(
-                                  controller: _code,
-                                  focusNode: _codeFocus,
-                                  onSubmit: _castOverNetwork,
-                                ),
+          // A phone layout on a tablet is a phone layout stretched. On the
+          // 2304x1440 tablet this app is cast from, the pairing card came out
+          // 1900 px wide with six 20 px marks lost in the middle of it and
+          // buttons the width of the room -- every child of the Column takes
+          // the whole constraint, and nothing ever gave it a smaller one.
+          //
+          // 560 is the width of the widest thing on the screen that anyone has
+          // to read or hit: a six-digit code, and a pill under it. A phone is
+          // narrower than that and is unaffected.
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                child: Column(
+                  children: [
+                    _Header(
+                      casting: _casting,
+                      connected: _connected,
+                      onSettings: () => setState(() => _settingsOpen = !_settingsOpen),
+                    ),
+                    if (_settingsOpen) _ServerField(controller: _url, enabled: !_casting),
+                    // Centred while there is room and scrollable when there is not.
+                    // The card is a fixed height and the keyboard takes about half
+                    // the screen, so a plain Center had nowhere to put it and Flutter
+                    // drew BOTTOM OVERFLOWED BY 36 PIXELS across the bottom of the
+                    // one card the user is trying to type into.
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) => SingleChildScrollView(
+                          child: ConstrainedBox(
+                            constraints:
+                                BoxConstraints(minHeight: constraints.maxHeight),
+                            child: Center(
+                              child: _casting
+                                  ? _CastingCard(
+                                      code: _code.text,
+                                      usb: _usb,
+                                      connected: _connected,
+                                      stats: _stats,
+                                    )
+                                  : _CodeCard(
+                                      controller: _code,
+                                      focusNode: _codeFocus,
+                                      onSubmit: _castOverNetwork,
+                                    ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-                Text(
-                  _status,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 12, color: _muted),
-                ),
-                const SizedBox(height: 16),
-                if (_casting)
-                  _PillButton(
-                    label: 'Stop mirroring',
-                    onPressed: _stop,
-                    background: _card,
-                    foreground: _alarm,
-                  )
-                else ...[
-                  _PillButton(
-                    label: _busy ? 'Connecting…' : 'Start mirroring',
-                    onPressed: _busy ? null : _castOverNetwork,
-                    // The green, because this is the button that makes the dot
-                    // green: the one action on the screen wears the colour of
-                    // the state it creates. The wordmark above it does not --
-                    // it is dimmed moonlight now, which is what leaves this the
-                    // only saturated thing anyone has to find.
-                    background: _live,
-                    foreground: _room,
-                  ),
-                  if (Platform.isAndroid) ...[
-                    const SizedBox(height: 10),
-                    _PillButton(
-                      label: 'Scan the code on the desktop',
-                      onPressed: _busy ? null : _scan,
-                      background: _card,
-                      foreground: _ink,
+                    Text(
+                      _status,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12, color: _muted),
                     ),
-                    const SizedBox(height: 10),
-                    _PillButton(
-                      label: 'Mirror over USB cable',
-                      onPressed: _castOverUsb,
-                      background: _card,
-                      // Violet: the second way to do the same thing. It reads
-                      // as a choice beside the green button rather than as a
-                      // lesser version of it, which grey on grey did.
-                      foreground: _accent,
-                    ),
+                    const SizedBox(height: 16),
+                    if (_casting)
+                      _PillButton(
+                        label: 'Stop mirroring',
+                        onPressed: _stop,
+                        background: _card,
+                        foreground: _alarm,
+                      )
+                    else ...[
+                      _PillButton(
+                        label: _busy ? 'Connecting…' : 'Start mirroring',
+                        onPressed: _busy ? null : _castOverNetwork,
+                        // The green, because this is the button that makes the dot
+                        // green: the one action on the screen wears the colour of
+                        // the state it creates. The wordmark above it does not --
+                        // it is dimmed moonlight now, which is what leaves this the
+                        // only saturated thing anyone has to find.
+                        background: _live,
+                        foreground: _room,
+                      ),
+                      if (Platform.isAndroid) ...[
+                        const SizedBox(height: 10),
+                        _PillButton(
+                          label: 'Scan the code on the desktop',
+                          onPressed: _busy ? null : _scan,
+                          background: _card,
+                          foreground: _ink,
+                        ),
+                        const SizedBox(height: 10),
+                        _PillButton(
+                          label: 'Mirror over USB cable',
+                          onPressed: _castOverUsb,
+                          background: _card,
+                          // Violet: the second way to do the same thing. It reads
+                          // as a choice beside the green button rather than as a
+                          // lesser version of it, which grey on grey did.
+                          foreground: _accent,
+                        ),
+                      ],
+                    ],
                   ],
-                ],
-              ],
+                ),
+              ),
             ),
           ),
         ),
