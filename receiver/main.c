@@ -1537,8 +1537,16 @@ on_connected (GObject *session, GAsyncResult *result, gpointer user_data)
   json_builder_end_object (b);
   send_json (self, b);
 
-  set_status (self, "Waiting for a phone");
-  /* And the strip, which until now said "Starting" from launch until the first
+  /* Cleared, not set: the strip below says "Waiting for a phone" and the card
+   * used to say it too, eight inches above it, in the one state the program
+   * spends most of its life in. The strip is the surface that carries
+   * connection state -- it is on both pages and it is never not there -- so
+   * this line is left for what the strip cannot say: an error, or a transition
+   * worth a sentence. Emptied rather than hidden, because a GtkLabel with no
+   * text is still a line tall, and the card keeping its height means the next
+   * message does not shove the footnote down when it arrives. */
+  set_status (self, "");
+  /* The strip, which until now said "Starting" from launch until the first
    * cast ended -- the one state it is never in once the socket is up. */
   set_strip_state (self, NULL, "Waiting for a phone");
 }
