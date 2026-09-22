@@ -27,6 +27,18 @@ sender/android/gradle/
 sender/android/*.gradle.kts
 sender/android/app/*.gradle.kts
 sender/android/app/src/main/res/
+# ...except the launcher icon, which is ours and not the scaffold's. Git cannot
+# re-include a file whose parent directory is excluded, so the directory is
+# un-excluded and its contents excluded instead. `flutter create` never
+# overwrites a file that is already there (tools/scaffold-sender.sh), so
+# committing these five is the whole of what keeps the APK from shipping the
+# default Flutter logo -- which is what every APK built so far has carried,
+# because branding/make-icons.py wrote them into an ignored directory and CI
+# starts from a clean checkout.
+!sender/android/app/src/main/res/
+sender/android/app/src/main/res/*
+!sender/android/app/src/main/res/mipmap-*/
+!sender/android/app/src/main/res/mipmap-*/ic_launcher.png
 sender/android/app/src/profile/
 sender/ios/Runner/
 sender/ios/Runner.xcodeproj/

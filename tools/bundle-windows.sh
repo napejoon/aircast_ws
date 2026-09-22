@@ -160,9 +160,10 @@ cp -r "$PREFIX/share/icons/Adwaita" "$OUT/share/icons/"
 cp -r "$PREFIX/share/icons/hicolor" "$OUT/share/icons/" 2>/dev/null || true
 
 # Ours, into the same tree: gtk_window_set_icon_name("kagami") is a theme
-# lookup, and the theme is this directory. Not an error if it is missing from a
-# tree built by hand -- the window then has no icon, which is what it had
-# before there was one to give it.
+# lookup, and the theme is this directory. No `|| true` here, unlike the hicolor
+# copy above: that theme may legitimately not exist in a prefix, this file is
+# committed, and under `set -e` a missing one stops the bundle -- which is the
+# right answer for a file the build is supposed to ship.
 install -Dm644 "$(dirname "$0")/../receiver/icons/kagami-256.png"   "$OUT/share/icons/hicolor/256x256/apps/kagami.png"
 
 # And an index for it, for the same reason gio-querymodules runs above: with

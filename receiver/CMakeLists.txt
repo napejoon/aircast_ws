@@ -50,9 +50,14 @@ pkg_check_modules(DEPS REQUIRED
 if(WIN32)
     enable_language(RC)
     set(KAGAMI_RC "${CMAKE_CURRENT_BINARY_DIR}/kagami.rc")
-    file(WRITE "${KAGAMI_RC}"
-        "1 ICON \"${CMAKE_CURRENT_SOURCE_DIR}/../installer/kagami.ico\"
+    set(KAGAMI_ICO "${CMAKE_CURRENT_SOURCE_DIR}/../installer/kagami.ico")
+    file(WRITE "${KAGAMI_RC}" "1 ICON \"${KAGAMI_ICO}\"
 ")
+    # Named as a dependency, because windres reads the .ico at compile time and
+    # nothing else tells the build it did. branding/make-icons.py is meant to be
+    # re-run whenever the mark changes, and without this the next build embeds
+    # the old icon and says nothing about it.
+    set_source_files_properties("${KAGAMI_RC}" PROPERTIES OBJECT_DEPENDS "${KAGAMI_ICO}")
 endif()
 
 add_executable(kagami WIN32 main.c update_check.c $<$<BOOL:${WIN32}>:${KAGAMI_RC}>)
