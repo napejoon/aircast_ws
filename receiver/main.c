@@ -627,9 +627,19 @@ static gboolean
 remaximize (gpointer window)
 {
   gtk_window_maximize (GTK_WINDOW (window));
-  g_message ("left fullscreen: window is %dx%d",
+  /* Both numbers, because they answer different questions: the size says
+   * whether the window came back to the work area, and the minimum says
+   * whether it could have. A minimum taller than the screen is a window the
+   * user cannot drag smaller -- the pointer pulls and nothing moves, or the
+   * title bar drags the whole window down instead. */
+  GtkWidget *child = gtk_window_get_child (GTK_WINDOW (window));
+  int min_h = 0, nat_h = 0;
+  if (child)
+    gtk_widget_measure (child, GTK_ORIENTATION_VERTICAL,
+        gtk_widget_get_width (GTK_WIDGET (window)), &min_h, &nat_h, NULL, NULL);
+  g_message ("left fullscreen: window %dx%d, content wants at least %d (natural %d)",
       gtk_widget_get_width (GTK_WIDGET (window)),
-      gtk_widget_get_height (GTK_WIDGET (window)));
+      gtk_widget_get_height (GTK_WIDGET (window)), min_h, nat_h);
   return G_SOURCE_REMOVE;
 }
 
