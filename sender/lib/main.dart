@@ -84,7 +84,12 @@ class SenderPage extends StatefulWidget {
 
 class _SenderPageState extends State<SenderPage> {
   final _code = TextEditingController();
-  final _url = TextEditingController(text: _defaultSignalUrl);
+  /// Where this phone dials. Compiled in, or replaced wholesale by the one in
+  /// a scanned pairing code -- never typed. The field that used to let a user
+  /// edit it was one text box away from pointing the cast at any relay on the
+  /// internet, and the receiver's QR already carries the address of the relay
+  /// it is itself on, which is the only one a pairing can work through.
+  String _signalUrl = _defaultSignalUrl;
 
   Signaling? _signaling;
   CastSession? _session;
@@ -92,7 +97,6 @@ class _SenderPageState extends State<SenderPage> {
   bool _connected = false;
   bool _busy = false;
   String _status = 'Enter the code shown on the desktop';
-  bool _settingsOpen = false;
 
   /// The last reading from the peer connection, or null before the first one.
   /// Kept rather than streamed into the widget so a rebuild for any other
@@ -140,11 +144,13 @@ class _SenderPageState extends State<SenderPage> {
       return setState(() => _status = 'The code is six digits');
     }
 
-    // tryParse, because parse throws and this line sits outside the try below:
-    // a non-numeric port typed into the settings field made the button do
-    // nothing at all. The FormatException completed a Future nobody holds, and
-    // the status line went on inviting the user to enter a code.
-    final url = Uri.tryParse(_url.text.trim());
+    // tryParse, because parse throws and this line sits outside the try below.
+    // It was a typed settings field that found this: a non-numeric port made
+    // the button do nothing at all, the FormatException completing a Future
+    // nobody holds while the status line went on inviting a code. The field is
+    // gone, and the check stays -- the string can still come from a QR whose
+    // contents this app did not write.
+    final url = Uri.tryParse(_signalUrl.trim());
     if (url == null) {
       return setState(() => _status = 'That server address is not a URL');
     }
@@ -225,7 +231,7 @@ class _SenderPageState extends State<SenderPage> {
     if (payload == null || !mounted) return;
     setState(() {
       _code.text = payload.code;
-      _url.text = payload.url;
+      _signalUrl = payload.url;
       _status = 'Scanned ${Uri.parse(payload.url).host} — press Start to mirror';
     });
   }
@@ -284,7 +290,6 @@ class _SenderPageState extends State<SenderPage> {
   void dispose() {
     _stop();
     _code.dispose();
-    _url.dispose();
     _codeFocus.dispose();
     super.dispose();
   }
@@ -308,12 +313,7 @@ class _SenderPageState extends State<SenderPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                 child: Column(
                   children: [
-                    _Header(
-                      casting: _casting,
-                      connected: _connected,
-                      onSettings: () => setState(() => _settingsOpen = !_settingsOpen),
-                    ),
-                    if (_settingsOpen) _ServerField(controller: _url, enabled: !_casting),
+                    _Header(casting: _casting, connected: _connected),
                     // Centred while there is room and scrollable when there is not.
                     // The card is a fixed height and the keyboard takes about half
                     // the screen, so a plain Center had nowhere to put it and Flutter
@@ -398,11 +398,10 @@ class _SenderPageState extends State<SenderPage> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.casting, required this.connected, required this.onSettings});
+  const _Header({required this.casting, required this.connected});
 
   final bool casting;
   final bool connected;
-  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -433,40 +432,7 @@ class _Header extends StatelessWidget {
                 color: connected ? _live : _caution,
               ),
             ),
-          IconButton(
-            onPressed: onSettings,
-            icon: const Icon(Icons.tune, size: 18, color: _muted),
-            tooltip: 'Server',
-          ),
         ],
-      );
-}
-
-class _ServerField extends StatelessWidget {
-  const _ServerField({required this.controller, required this.enabled});
-
-  final TextEditingController controller;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: TextField(
-          controller: controller,
-          enabled: enabled,
-          style: const TextStyle(fontSize: 13, color: _ink),
-          decoration: InputDecoration(
-            isDense: true,
-            filled: true,
-            fillColor: _card,
-            labelText: 'Signalling server',
-            labelStyle: const TextStyle(color: _muted, fontSize: 12),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: _edge),
-            ),
-          ),
-        ),
       );
 }
 
