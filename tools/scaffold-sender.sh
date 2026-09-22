@@ -16,6 +16,28 @@ flutter create --platforms=android,ios --org io.kagami --project-name kagami_sen
 # The scaffold drops in a widget test for a MyApp that is not ours.
 rm -f test/widget_test.dart
 
+# Gradle signs debug builds with ~/.android/debug.keystore and generates one if
+# it finds none. Every CI runner is a fresh machine, so every debug APK this
+# project has ever published was signed by a key that existed for one build --
+# and Android refuses to update a package whose signature changed, so the APK
+# ci.yml calls "the one a maintainer hands someone to try" could only ever be
+# installed by uninstalling the last one first. INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+#
+# So the key is committed and copied into place. It is Android's own debug key,
+# parameters and all -- alias androiddebugkey, password "android", the same
+# values on every machine with an SDK -- so it is not a secret and is not
+# treated as one. What keeps it out of a release is the signingConfig deletion
+# below, which fails the build if Gradle still signs release at all.
+#
+# Only when there is none: a developer's own debug key is theirs, and a script
+# that overwrites it would break every other Android app they have installed
+# from their own machine.
+if [ ! -f "$HOME/.android/debug.keystore" ]; then
+  mkdir -p "$HOME/.android"
+  cp android/debug.keystore "$HOME/.android/debug.keystore"
+  echo "installed the committed debug key at ~/.android/debug.keystore"
+fi
+
 cd android/app
 
 # `sed -i` exits 0 when it matches nothing, so an unchecked patch does not fail
