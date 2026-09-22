@@ -474,6 +474,13 @@ class _CodeCard extends StatelessWidget {
             decoration: const InputDecoration(
               counterText: '',
               border: InputBorder.none,
+              // An empty field is invisible, and Material's default padding
+              // makes it a tall invisible thing: on a tablet the card read as
+              // a label, a hole, and six marks at the bottom of it. The field
+              // is as tall as the digits it holds now, so the marks sit under
+              // the place the digits will appear.
+              isDense: true,
+              contentPadding: EdgeInsets.zero,
             ),
           ),
           const SizedBox(height: 10),
@@ -501,10 +508,12 @@ class _Slots extends StatelessWidget {
         children: List.generate(
           6,
           (i) => Container(
-            width: 20,
-            height: 2,
-            margin: const EdgeInsets.symmetric(horizontal: 3),
-            color: i < filled ? _muted : _edge,
+            width: 28,
+            height: 3,
+            margin: const EdgeInsets.symmetric(horizontal: 5),
+            // Wider and one pixel thicker than they were: at 20x2 on a tablet
+            // held at arm's length they were a dotted line, not six places.
+            color: i < filled ? _live : _edge,
           ),
         ),
       );
