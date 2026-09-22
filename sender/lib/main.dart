@@ -325,69 +325,86 @@ class _SenderPageState extends State<SenderPage> {
                           child: ConstrainedBox(
                             constraints:
                                 BoxConstraints(minHeight: constraints.maxHeight),
+                            // The card and the buttons are one group, centred
+                            // together. They used to be two: the card centred in
+                            // everything left over, the buttons pinned to the
+                            // bottom edge, and on a tablet half a screen of air
+                            // between them -- two unrelated things rather than a
+                            // code and what to press once it is typed.
+                            //
+                            // Inside the scroll view, so the keyboard pushes the
+                            // whole group rather than covering the half of it
+                            // that is pinned.
                             child: Center(
-                              child: _casting
-                                  ? _CastingCard(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (_casting)
+                                    _CastingCard(
                                       code: _code.text,
                                       usb: _usb,
                                       connected: _connected,
                                       stats: _stats,
                                     )
-                                  : _CodeCard(
+                                  else
+                                    _CodeCard(
                                       controller: _code,
                                       focusNode: _codeFocus,
                                       onSubmit: _castOverNetwork,
                                     ),
+                                  const SizedBox(height: 28),
+                                  Text(
+                                    _status,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(fontSize: 12, color: _muted),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  if (_casting)
+                                    _PillButton(
+                                      label: 'Stop mirroring',
+                                      onPressed: _stop,
+                                      background: _card,
+                                      foreground: _alarm,
+                                    )
+                                  else ...[
+                                    _PillButton(
+                                      label: _busy ? 'Connecting…' : 'Start mirroring',
+                                      onPressed: _busy ? null : _castOverNetwork,
+                                      // The green, because this is the button that makes the dot
+                                      // green: the one action on the screen wears the colour of
+                                      // the state it creates. The wordmark above it does not --
+                                      // it is dimmed moonlight now, which is what leaves this the
+                                      // only saturated thing anyone has to find.
+                                      background: _live,
+                                      foreground: _room,
+                                    ),
+                                    if (Platform.isAndroid) ...[
+                                      const SizedBox(height: 10),
+                                      _PillButton(
+                                        label: 'Scan the code on the desktop',
+                                        onPressed: _busy ? null : _scan,
+                                        background: _card,
+                                        foreground: _ink,
+                                      ),
+                                      const SizedBox(height: 10),
+                                      _PillButton(
+                                        label: 'Mirror over USB cable',
+                                        onPressed: _castOverUsb,
+                                        background: _card,
+                                        // Violet: the second way to do the same thing. It reads
+                                        // as a choice beside the green button rather than as a
+                                        // lesser version of it, which grey on grey did.
+                                        foreground: _accent,
+                                      ),
+                                    ],
+                                  ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                    Text(
-                      _status,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 12, color: _muted),
-                    ),
-                    const SizedBox(height: 16),
-                    if (_casting)
-                      _PillButton(
-                        label: 'Stop mirroring',
-                        onPressed: _stop,
-                        background: _card,
-                        foreground: _alarm,
-                      )
-                    else ...[
-                      _PillButton(
-                        label: _busy ? 'Connecting…' : 'Start mirroring',
-                        onPressed: _busy ? null : _castOverNetwork,
-                        // The green, because this is the button that makes the dot
-                        // green: the one action on the screen wears the colour of
-                        // the state it creates. The wordmark above it does not --
-                        // it is dimmed moonlight now, which is what leaves this the
-                        // only saturated thing anyone has to find.
-                        background: _live,
-                        foreground: _room,
-                      ),
-                      if (Platform.isAndroid) ...[
-                        const SizedBox(height: 10),
-                        _PillButton(
-                          label: 'Scan the code on the desktop',
-                          onPressed: _busy ? null : _scan,
-                          background: _card,
-                          foreground: _ink,
-                        ),
-                        const SizedBox(height: 10),
-                        _PillButton(
-                          label: 'Mirror over USB cable',
-                          onPressed: _castOverUsb,
-                          background: _card,
-                          // Violet: the second way to do the same thing. It reads
-                          // as a choice beside the green button rather than as a
-                          // lesser version of it, which grey on grey did.
-                          foreground: _accent,
-                        ),
-                      ],
-                    ],
                   ],
                 ),
               ),
