@@ -453,44 +453,54 @@ class _CodeCard extends StatelessWidget {
   Widget build(BuildContext context) => _Card(
         children: [
           const Text('Pairing code', style: TextStyle(fontSize: 13, color: _muted)),
-          const SizedBox(height: 18),
-          TextField(
-            controller: controller,
-            focusNode: focusNode,
-            textAlign: TextAlign.center,
-            keyboardType: TextInputType.number,
-            inputFormatters: [
-              FilteringTextInputFormatter.digitsOnly,
-              LengthLimitingTextInputFormatter(6),
+          const SizedBox(height: 14),
+          // The marks sit under the digits rather than under the field. An
+          // empty field is invisible whatever its padding, so a row of marks
+          // below it left a hole between the label and them -- on a tablet, a
+          // card with nothing in the middle. In a stack they are the line the
+          // digits land on, which is the shape every code field already has.
+          Stack(
+            alignment: Alignment.bottomCenter,
+            children: [
+              // Behind the field in paint order and ignoring pointers, so a tap
+              // anywhere along the marks lands in the field they belong to.
+              //
+              // The placeholder used to be a dimmed 000000 in the same face and
+              // size as a typed code, which reads as a value already entered
+              // rather than as an empty field. Six marks say the same thing --
+              // this many digits, this many still to go -- without pretending
+              // to be digits.
+              IgnorePointer(
+                child: ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: controller,
+                  builder: (_, value, __) => _Slots(filled: value.text.length),
+                ),
+              ),
+              TextField(
+                controller: controller,
+                focusNode: focusNode,
+                textAlign: TextAlign.center,
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(6),
+                ],
+                onSubmitted: (_) => onSubmit(),
+                style: const TextStyle(
+                  fontSize: 44,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 10,
+                  color: _ink,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+                decoration: const InputDecoration(
+                  counterText: '',
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.only(bottom: 10),
+                ),
+              ),
             ],
-            onSubmitted: (_) => onSubmit(),
-            style: const TextStyle(
-              fontSize: 44,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 10,
-              color: _ink,
-              fontFeatures: [FontFeature.tabularFigures()],
-            ),
-            decoration: const InputDecoration(
-              counterText: '',
-              border: InputBorder.none,
-              // An empty field is invisible, and Material's default padding
-              // makes it a tall invisible thing: on a tablet the card read as
-              // a label, a hole, and six marks at the bottom of it. The field
-              // is as tall as the digits it holds now, so the marks sit under
-              // the place the digits will appear.
-              isDense: true,
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-          const SizedBox(height: 10),
-          // The hint used to be a dimmed 000000 in the same face and size as a
-          // typed code, which reads as a value already entered rather than as
-          // an empty field. Six marks say the same thing -- this many digits,
-          // this many still to go -- without pretending to be digits.
-          ValueListenableBuilder<TextEditingValue>(
-            valueListenable: controller,
-            builder: (_, value, __) => _Slots(filled: value.text.length),
           ),
         ],
       );
