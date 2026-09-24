@@ -108,7 +108,6 @@ typedef struct {
   GtkWidget *window;
   GtkWidget *stack;
   GtkWidget *picture;
-  GtkWidget *frame;             /* the aspect frame around the bezel */
   GtkWidget *code_label;
   GtkWidget *status_label;
   GtkWidget *record_button;
@@ -607,11 +606,50 @@ on_fullscreen_clicked (GtkButton *button, App *self)
   }
 }
 
-/* Deferred out of notify::fullscreened; see the call site for why. */
+/* Deferred out of notify::fullscreened; see the call site for why.
+ *
+ * Unmaximize first, and this is the fix for a window that came back from
+ * fullscreen with its bottom under the taskbar. GTK still holds the maximized
+ * state flag across the fullscreen, so gtk_window_maximize on its own is a
+ * no-op: nothing recomputes the geometry, and what is left is a window the
+ * size of the fullscreen -- 2576x1431 measured on a 2560x1440 screen whose
+ * work area ends at 1392. The 39 px hanging past it is the connection strip,
+ * which is what the user sees sliced off along the taskbar.
+ *
+ * Dropping the flag first makes the maximize real, and Windows recomputes from
+ * the work area rather than from the size the window happened to have.
+ *
+ * The size is logged because the last two bugs on this path were found by
+ * measuring the window from outside the process, which is a slow way to learn
+ * something the program already knows. */
+static gboolean
+remaximize (gpointer window)
+{
+  gtk_window_maximize (GTK_WINDOW (window));
+  /* Both numbers, because they answer different questions: the size says
+   * whether the window came back to the work area, and the minimum says
+   * whether it could have. A minimum taller than the screen is a window the
+   * user cannot drag smaller -- the pointer pulls and nothing moves, or the
+   * title bar drags the whole window down instead. */
+  GtkWidget *child = gtk_window_get_child (GTK_WINDOW (window));
+  int min_h = 0, nat_h = 0;
+  if (child)
+    gtk_widget_measure (child, GTK_ORIENTATION_VERTICAL,
+        gtk_widget_get_width (GTK_WIDGET (window)), &min_h, &nat_h, NULL, NULL);
+  g_message ("left fullscreen: window %dx%d, content wants at least %d (natural %d)",
+      gtk_widget_get_width (GTK_WIDGET (window)),
+      gtk_widget_get_height (GTK_WIDGET (window)), min_h, nat_h);
+  return G_SOURCE_REMOVE;
+}
+
 static gboolean
 restore_maximized (gpointer window)
 {
-  gtk_window_maximize (GTK_WINDOW (window));
+  gtk_window_unmaximize (GTK_WINDOW (window));
+  /* One more turn, for the same reason this one is deferred: two window state
+   * changes in a row is what crashed the win32 backend before. */
+  g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, remaximize,
+      g_object_ref (window), g_object_unref);
   return G_SOURCE_REMOVE;
 }
 
@@ -1562,20 +1600,6 @@ typedef struct {
  * will hand out its paintable — the "paintable" property getter errors on any
  * other thread, and on_pad_added runs on a streaming one. Fetching it here
  * rather than there is the difference between a live picture and a blank one. */
-/* The only thing that moves the frame's ratio now, and it runs when the
- * paintable says its size changed rather than on every frame: a rotation on
- * the tablet, or a source that comes up at one size and settles at another.
- * A paintable with no intrinsic ratio yet (nothing decoded) reports 0, and the
- * frame keeps whatever it had. */
-static void
-follow_paintable_ratio (GdkPaintable *paintable, gpointer data)
-{
-  App *self = data;
-  double ratio = gdk_paintable_get_intrinsic_aspect_ratio (paintable);
-  if (ratio > 0 && self->frame)
-    gtk_aspect_frame_set_ratio (GTK_ASPECT_FRAME (self->frame), (float) ratio);
-}
-
 static gboolean
 attach_paintable (gpointer data)
 {
@@ -1586,16 +1610,6 @@ attach_paintable (gpointer data)
   g_object_get (handover->sink, "paintable", &paintable, NULL);
   if (paintable) {
     gtk_picture_set_paintable (GTK_PICTURE (self->picture), paintable);
-    follow_paintable_ratio (paintable, self);
-    /* Plain connect, and deliberately. g_signal_connect_object was here for
-     * one build and it killed the process the instant a cast came up: its
-     * fourth argument has to be a GObject to weak-ref, App is a plain struct,
-     * and the weak-ref went into whatever that pointer happened to be. The
-     * handler needs no disconnect anyway -- it dies with the paintable, which
-     * the picture drops when the next session hands it another one, and App
-     * outlives every paintable in the run. */
-    g_signal_connect (paintable, "invalidate-size",
-        G_CALLBACK (follow_paintable_ratio), self);
     g_object_unref (paintable);
     show_page (self, "live");
     set_strip_state (self, "live", "Mirroring");
@@ -2282,62 +2296,32 @@ build_live_page (App *self)
 
   gtk_box_append (GTK_BOX (bezel), self->picture);
 
-  /* The frame is what lets the mirror fill the window.
+  /* No aspect frame around this, and that is a trade with a measured price.
    *
-   * A GtkPicture's natural size is the paintable's own -- the pixel dimensions
-   * of the frame that just arrived -- and a halign/valign CENTER parent is
-   * capped at exactly that, which is why the mirror used to be painted 1:1 and
-   * the hexpand above did nothing. The aspect frame takes all the space going,
-   * hands its child the largest rectangle inside it that still has the child's
-   * aspect ratio, and centres it -- so the bezel goes on hugging the video
-   * while both scale to the window.
+   * A GtkAspectFrame hugged the video so the bezel came out phone-shaped, and
+   * it answered a real problem: a GtkPicture's natural size is the paintable's
+   * own, so a centred parent capped the mirror at 1:1 and the hexpand above
+   * did nothing. But an aspect frame measures height from width. The program
+   * logged what that costs at a window 1100 px wide: "content wants at least
+   * 721", which is (1100 - 92) / 1.6 plus the bezel's chrome. On a 2560 px
+   * screen the same sum asks for about 1700, the window has 1392, and two
+   * things follow from it.
    *
-   * This was tried once and reverted on sight, and the reason it failed is
-   * gone. Then the encoder was free to collapse to 768x480 whenever QP rose,
-   * so filling the window meant a 2.7x upscale of a small frame, and what that
-   * showed was macroblocks. The comment that stood here named the condition:
-   * fix the resolution collapse first. The sender now names
-   * MAINTAIN_RESOLUTION (sender/lib/session.dart), under which libwebrtc
-   * builds no QualityScaler at all and pays a squeeze in frame rate instead,
-   * so the source stays at the tablet's own 2304x1440 and filling any screen
-   * smaller than that is a downscale -- which only ever looks sharper.
+   * The toolbar and the connection strip are pushed past the bottom edge --
+   * the strip sliced along the top of the taskbar, which is how this was
+   * reported. And the window cannot be dragged smaller than a minimum taller
+   * than the screen, so the pointer pulls at an edge and nothing moves.
    *
-   * The dependency runs one way and the strip reports it: if PICTURE ever
-   * reads smaller than the source again, this frame is upscaling and should
-   * come out together with whatever let the resolution drop.
-   *
-   * The ratio used to be read from the child, for one signal handler less.
-   * That is the bug below. */
-
-  /* obey_child FALSE, and this is the fix for a bug that cost a cast to find.
-   *
-   * It read the ratio from the child, which is the bezel around a GtkPicture
-   * whose paintable is gtk4paintablesink's -- and that paintable's size is not
-   * a constant. Every size it announces re-measures the frame, the frame
-   * re-allocates the box, and the box re-measures the child, which is a loop
-   * with no fixed point. GTK says so and then gives up:
-   *
-   *   Gdk-WARNING: gdk-frame-clock: layout continuously requested,
-   *                giving up after 4 tries
-   *
-   * What it leaves behind is whatever the fourth try allocated. On a 1936x1048
-   * window mirroring a 2304x1440 tablet that was a picture taller than the
-   * window, with the toolbar and the connection strip pushed off the bottom
-   * edge -- the strip half-cut, PATH and BUFFER and PICTURE and LOSS sliced
-   * through the middle. The window also refused every resize down to 700x700,
-   * because a layout that never settles never lets go of the size it is on.
-   *
-   * So the ratio is set from the paintable instead (attach_paintable), which
-   * asks it once when it changes rather than letting the answer come back
-   * through the layout. The bezel's 94 px of chrome is no longer inside the
-   * ratio, so the video sits a hairline short of the frame it is centred in --
-   * black on black, and the same order of error the old comment accepted in
-   * the other direction. */
-  self->frame = gtk_aspect_frame_new (0.5f, 0.5f, 16.0f / 9.0f, FALSE);
-  gtk_widget_set_hexpand (self->frame, TRUE);
-  gtk_widget_set_vexpand (self->frame, TRUE);
-  gtk_aspect_frame_set_child (GTK_ASPECT_FRAME (self->frame), bezel);
-  return self->frame;
+   * CONTENT_FIT_CONTAIN already letterboxes the video inside whatever box it
+   * is given, and GtkPicture can shrink, so the bezel fills the area and asks
+   * for nothing. The bezel stops being phone-shaped: it is the window's shape
+   * now, with bars above and below the picture. On a 16:9 window showing a
+   * 1.6 tablet those bars are about five percent, and .bezel (#03060b) and
+   * .screen (#000000) are a shade apart, so what is lost is a silhouette
+   * rather than a frame. A window that resizes is worth more. */
+  gtk_widget_set_hexpand (bezel, TRUE);
+  gtk_widget_set_vexpand (bezel, TRUE);
+  return bezel;
 }
 
 /* The readings are PATH, BUFFER, PICTURE and LOSS, and every one of them is an
