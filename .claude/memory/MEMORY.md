@@ -1,0 +1,2 @@
+- [User: terse Thai reports](user-thai-terse-reports.md) — reply in Thai, rank causes with tell-tale signs, fix on branch
+- [Kagami verify loop](kagami-verify-loop.md) — build, install and look at it on Windows/adb: the traps that cost a cycle each
