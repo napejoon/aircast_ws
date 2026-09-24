@@ -636,7 +636,7 @@ remaximize (gpointer window)
   if (child)
     gtk_widget_measure (child, GTK_ORIENTATION_VERTICAL,
         gtk_widget_get_width (GTK_WIDGET (window)), &min_h, &nat_h, NULL, NULL);
-  g_message ("left fullscreen: window %dx%d, content wants at least %d (natural %d)",
+  g_message ("remaximized: window %dx%d, content wants at least %d (natural %d)",
       gtk_widget_get_width (GTK_WIDGET (window)),
       gtk_widget_get_height (GTK_WIDGET (window)), min_h, nat_h);
   return G_SOURCE_REMOVE;
@@ -683,6 +683,23 @@ on_fullscreen_changed (GObject *window, GParamSpec *pspec, App *self)
     gtk_widget_add_css_class (self->window, "immersive");
   } else {
     gtk_widget_remove_css_class (self->window, "immersive");
+    /* Unconditional, because the last round of this bug was chased with a
+     * message that only printed inside the was_maximized branch -- and the
+     * branch never ran, so the log said nothing at all and the shape of the
+     * failure stayed a guess. Three numbers separate the remaining
+     * candidates: what GTK thinks the window is, what the child was actually
+     * given, and whether the window still believes it is maximized. If the
+     * child's allocation is taller than the window, the surface came back
+     * from fullscreen stale and the strip is being laid out past the bottom
+     * of it. */
+    GtkWidget *content = gtk_window_get_child (GTK_WINDOW (window));
+    g_message ("left fullscreen: window %dx%d, child allocated %d, "
+        "maximized=%d, was_maximized=%d",
+        gtk_widget_get_width (GTK_WIDGET (window)),
+        gtk_widget_get_height (GTK_WIDGET (window)),
+        content ? gtk_widget_get_height (content) : -1,
+        gtk_window_is_maximized (GTK_WINDOW (window)), self->was_maximized);
+
     if (self->was_maximized) {
       self->was_maximized = FALSE;
       /* Not from here. This handler runs inside gtk_window_unfullscreen, and
