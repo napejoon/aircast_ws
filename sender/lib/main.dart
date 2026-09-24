@@ -380,11 +380,36 @@ class _SenderPageState extends State<SenderPage> {
                                     ),
                                     if (Platform.isAndroid) ...[
                                       const SizedBox(height: 10),
-                                      _PillButton(
+                                      // An icon, not a sentence. "Scan the code
+                                      // on the desktop" was a full line of text
+                                      // in a pill as wide as the card, for an
+                                      // action a QR glyph says by itself. The
+                                      // sentence lives on as the tooltip and the
+                                      // semantics name: an icon with no name is
+                                      // nothing at all to a screen reader.
+                                      Semantics(
+                                        button: true,
                                         label: 'Scan the code on the desktop',
-                                        onPressed: _busy ? null : _scan,
-                                        background: _card,
-                                        foreground: _ink,
+                                        child: Tooltip(
+                                          message: 'Scan the code on the desktop',
+                                          child: Material(
+                                            color: _card,
+                                            shape: const CircleBorder(),
+                                            child: InkWell(
+                                              customBorder: const CircleBorder(),
+                                              onTap: _busy ? null : _scan,
+                                              child: const SizedBox(
+                                                width: 56,
+                                                height: 56,
+                                                child: Icon(
+                                                  Icons.qr_code_scanner,
+                                                  color: _ink,
+                                                  size: 24,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
                                       ),
                                       const SizedBox(height: 10),
                                       _PillButton(
