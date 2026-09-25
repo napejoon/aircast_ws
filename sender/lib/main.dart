@@ -395,12 +395,12 @@ class _SenderPageState extends State<SenderPage> {
                                     _PillButton(
                                       label: _busy ? 'Connecting…' : 'Start mirroring',
                                       onPressed: _busy ? null : _castOverNetwork,
-                                      // The green, because this is the button that makes the dot
-                                      // green: the one action on the screen wears the colour of
-                                      // the state it creates. The wordmark above it does not --
-                                      // it is dimmed moonlight now, which is what leaves this the
-                                      // only saturated thing anyone has to find.
-                                      background: _live,
+                                      // Moonlight, not the green. A full-width pill in the live
+                                      // colour turned the whole idle screen turquoise, and the
+                                      // green is meant to answer one question -- am I sharing? --
+                                      // which before this press the answer is no. The brightest
+                                      // fill on the screen is still what marks the one action.
+                                      background: _ink,
                                       foreground: _room,
                                     ),
                                     if (Platform.isAndroid) ...[
@@ -573,7 +573,7 @@ class _Slots extends StatelessWidget {
             margin: const EdgeInsets.symmetric(horizontal: 5),
             // Wider and one pixel thicker than they were: at 20x2 on a tablet
             // held at arm's length they were a dotted line, not six places.
-            color: i < filled ? _live : _edge,
+            color: i < filled ? _ink : _edge,
           ),
         ),
       );
@@ -740,8 +740,8 @@ class _PillButton extends StatelessWidget {
             disabledBackgroundColor: _card,
             disabledForegroundColor: _muted,
             // A card-coloured pill on the gradient is a shape only if it has
-            // an edge. The green one needs none, and a dark line round it
-            // would read as a bruise.
+            // an edge. The moonlight one needs none, and a dark line round
+            // it would read as a bruise.
             side: background == _card ? const BorderSide(color: _edge) : BorderSide.none,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
           ),
