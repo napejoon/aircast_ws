@@ -451,13 +451,32 @@ start_recording (App *self)
     return;
   }
 
-  gst_bin_add (GST_BIN (self->pipeline), self->record_branch);
+  /* Into the tee's own bin, not the pipeline. The tee lives inside the tail
+   * bin, and a link that crosses a bin boundary without a ghost pad is refused
+   * with GST_PAD_LINK_WRONG_HIERARCHY. Nothing checked, so every recording was
+   * a 336-byte file with no track in it -- matroskamux "All pads EOS before any
+   * buffers received" -- while the keyframe it had asked for arrived 0.7 s
+   * later on the branch that was linked. */
+  GstBin *parent = GST_BIN (gst_object_get_parent (GST_OBJECT (self->tee)));
+  gst_bin_add (parent, self->record_branch);
+  gst_object_unref (parent);
   gst_element_sync_state_with_parent (self->record_branch);
 
   self->record_tee_pad = gst_element_request_pad_simple (self->tee, "src_%u");
   GstPad *sink = gst_element_get_static_pad (self->record_branch, "sink");
-  gst_pad_link (self->record_tee_pad, sink);
+  GstPadLinkReturn linked = gst_pad_link (self->record_tee_pad, sink);
   gst_object_unref (sink);
+  if (linked != GST_PAD_LINK_OK) {
+    gst_element_release_request_pad (self->tee, self->record_tee_pad);
+    g_clear_object (&self->record_tee_pad);
+    gst_element_set_state (self->record_branch, GST_STATE_NULL);
+    gst_bin_remove (GST_BIN (GST_OBJECT_PARENT (self->record_branch)), self->record_branch);
+    self->record_branch = NULL;
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (self->record_button), FALSE);
+    set_status (self, "Could not start recording");
+    g_printerr ("record branch link failed: %d\n", linked);
+    return;
+  }
 
   /* Ask the phone for a keyframe now. The branch is grafted on wherever the
    * stream happens to be, and libwebrtc emits an IDR only at stream start or on
@@ -497,7 +516,7 @@ drop_record_branch (gpointer data)
 
   if (self->record_branch) {
     gst_element_set_state (self->record_branch, GST_STATE_NULL);
-    gst_bin_remove (GST_BIN (self->pipeline), self->record_branch);
+    gst_bin_remove (GST_BIN (GST_OBJECT_PARENT (self->record_branch)), self->record_branch);
     self->record_branch = NULL;
   }
   if (self->record_tee_pad) {
@@ -1981,6 +2000,9 @@ on_pad_added (GstElement *webrtc, GstPad *pad, App *self)
   gst_pad_add_probe (watch, GST_PAD_PROBE_TYPE_BUFFER, on_encoded_buffer, self, NULL);
   gst_object_unref (watch);
   self->record_mux = g_strdup (mux);
+  /* The record branch is added in here, next to the tee, so this is the bin
+   * that sees its EOS first and has to forward it (see build_pipeline). */
+  g_object_set (tail, "message-forward", TRUE, NULL);
 
   gst_bin_add (GST_BIN (self->pipeline), tail);
   gst_element_sync_state_with_parent (tail);
