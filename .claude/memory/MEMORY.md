@@ -1,2 +1,4 @@
 - [User: terse Thai reports](user-thai-terse-reports.md) — reply in Thai, rank causes with tell-tale signs, fix on branch
 - [Kagami verify loop](kagami-verify-loop.md) — build, install and look at it on Windows/adb: the traps that cost a cycle each
+- [Release blockers](kagami-release-blockers.md) — drafts on purpose: user's minisign key, unsigned APK, no paid code-signing cert
+- [Check the named thing](feedback-check-the-named-thing.md) — verify the exact element the user complained about in a screenshot before saying done
