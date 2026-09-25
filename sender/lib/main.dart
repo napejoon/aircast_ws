@@ -22,8 +22,27 @@ const _defaultSignalUrl =
 /// halves of one product look like one product. Kagami is a mirror, and the
 /// room both halves draw is a moon over deep water.
 const _room = Color(0xFF05080F);
-const _card = Color(0xFF0D1726);
-const _edge = Color(0xFF1A2B45);
+const _card = Color(0xFF0B1526);
+const _edge = Color(0xFF22344F);
+
+/// The room is a gradient, as the receiver's is (window.room in style.css.h):
+/// lighter at the top, where the card sits. A flat #05080f read as black on a
+/// tablet beside the receiver's window, which reads as deep water -- one
+/// product, two different rooms.
+const _roomGradient = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [Color(0xFF0A1424), _room, Color(0xFF04060C)],
+  stops: [0, 0.55, 1],
+);
+
+/// And the card the same one the receiver draws (.card): a lift at the top edge
+/// rather than a flat fill, which is what made it read as an object.
+const _cardGradient = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [Color(0xFF111F33), _card],
+);
 const _ink = Color(0xFFE8EDF2);
 const _muted = Color(0xFF7B8EA6);
 
@@ -46,10 +65,6 @@ const _alarm = Color(0xFFFF7A5C);
 /// otherwise entirely cold, which is what makes it findable without shouting.
 const _caution = Color(0xFFFFB35C);
 
-/// Violet, for the second way to do the same thing -- the USB path beside the
-/// network one. Not the indigo it used to be: on this ground an indigo is the
-/// ground. Far enough from the green and the amber to be neither.
-const _accent = Color(0xFFB693FF);
 
 void main() => runApp(const AircastApp());
 
@@ -63,13 +78,19 @@ class AircastApp extends StatelessWidget {
         theme: ThemeData(
           useMaterial3: true,
           brightness: Brightness.dark,
-          scaffoldBackgroundColor: _room,
+          scaffoldBackgroundColor: Colors.transparent,
           colorScheme: const ColorScheme.dark(
             surface: _room,
             primary: _ink,
             onPrimary: _room,
             error: _alarm,
           ),
+        ),
+        // Behind every route rather than inside one page's tree, so the room
+        // is the same wherever the app goes -- the scanner included.
+        builder: (context, child) => DecoratedBox(
+          decoration: const BoxDecoration(gradient: _roomGradient),
+          child: child,
         ),
         home: const SenderPage(),
       );
@@ -313,7 +334,11 @@ class _SenderPageState extends State<SenderPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                 child: Column(
                   children: [
-                    _Header(casting: _casting, connected: _connected),
+                    _Header(
+                      casting: _casting,
+                      connected: _connected,
+                      onScan: !_casting && Platform.isAndroid && !_busy ? _scan : null,
+                    ),
                     // Centred while there is room and scrollable when there is not.
                     // The card is a fixed height and the keyboard takes about half
                     // the screen, so a plain Center had nowhere to put it and Flutter
@@ -380,46 +405,15 @@ class _SenderPageState extends State<SenderPage> {
                                     ),
                                     if (Platform.isAndroid) ...[
                                       const SizedBox(height: 10),
-                                      // An icon, not a sentence. "Scan the code
-                                      // on the desktop" was a full line of text
-                                      // in a pill as wide as the card, for an
-                                      // action a QR glyph says by itself. The
-                                      // sentence lives on as the tooltip and the
-                                      // semantics name: an icon with no name is
-                                      // nothing at all to a screen reader.
-                                      Semantics(
-                                        button: true,
-                                        label: 'Scan the code on the desktop',
-                                        child: Tooltip(
-                                          message: 'Scan the code on the desktop',
-                                          child: Material(
-                                            color: _card,
-                                            shape: const CircleBorder(),
-                                            child: InkWell(
-                                              customBorder: const CircleBorder(),
-                                              onTap: _busy ? null : _scan,
-                                              child: const SizedBox(
-                                                width: 56,
-                                                height: 56,
-                                                child: Icon(
-                                                  Icons.qr_code_scanner,
-                                                  color: _ink,
-                                                  size: 24,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 10),
                                       _PillButton(
                                         label: 'Mirror over USB cable',
                                         onPressed: _castOverUsb,
                                         background: _card,
-                                        // Violet: the second way to do the same thing. It reads
-                                        // as a choice beside the green button rather than as a
-                                        // lesser version of it, which grey on grey did.
-                                        foreground: _accent,
+                                        // Moonlight on the card, with the card's hairline. It
+                                        // was violet, a fifth hue that exists nowhere in the
+                                        // receiver; what makes it read as a second way rather
+                                        // than a lesser one is the edge, not a colour.
+                                        foreground: _ink,
                                       ),
                                     ],
                                   ],
@@ -440,10 +434,13 @@ class _SenderPageState extends State<SenderPage> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.casting, required this.connected});
+  const _Header({required this.casting, required this.connected, this.onScan});
 
   final bool casting;
   final bool connected;
+
+  /// Null hides the camera: while casting, and where there is no camera path.
+  final VoidCallback? onScan;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -473,6 +470,17 @@ class _Header extends StatelessWidget {
                 // screen had stopped going out when it was about to resume.
                 color: connected ? _live : _caution,
               ),
+            ),
+          // Top right, where the settings gear was. It is the other way to
+          // enter the code, so it belongs beside the header rather than in
+          // the stack of things that start a cast -- and a QR glyph needs no
+          // sentence under it. IconButton's tooltip is also its semantics
+          // label, so a screen reader still hears what it does.
+          if (onScan != null)
+            IconButton(
+              onPressed: onScan,
+              tooltip: 'Scan the code on the desktop',
+              icon: const Icon(Icons.qr_code_scanner, color: _ink, size: 22),
             ),
         ],
       );
@@ -699,8 +707,8 @@ class _Card extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
         decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.circular(22),
+          gradient: _cardGradient,
+          borderRadius: BorderRadius.circular(28),
           border: Border.all(color: _edge),
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: children),
@@ -731,6 +739,10 @@ class _PillButton extends StatelessWidget {
             foregroundColor: foreground,
             disabledBackgroundColor: _card,
             disabledForegroundColor: _muted,
+            // A card-coloured pill on the gradient is a shape only if it has
+            // an edge. The green one needs none, and a dark line round it
+            // would read as a bruise.
+            side: background == _card ? const BorderSide(color: _edge) : BorderSide.none,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
           ),
           child: Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
