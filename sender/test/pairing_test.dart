@@ -41,4 +41,13 @@ void main() {
   ]) {
     test('refused: $raw', () => expect(PairingPayload.parse(raw), isNull));
   }
+
+  test('the built-in server is recognised, and nothing that only resembles it', () {
+    final p = PairingPayload.parse('kagami://pair?c=482913&s=wss%3A%2F%2FAircast.Cloud%2Fws')!;
+    expect(p.isOn('wss://aircast.cloud/ws'), isTrue);
+    expect(p.isOn('ws://aircast.cloud/ws'), isFalse); // plaintext is not the same server
+    expect(p.isOn('wss://aircast.cloud:8443/ws'), isFalse);
+    expect(p.isOn('wss://aircast.cloud.evil.example/ws'), isFalse);
+    expect(p.isOn('wss://evil.example/ws'), isFalse);
+  });
 }

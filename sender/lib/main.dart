@@ -238,23 +238,29 @@ class _SenderPageState extends State<SenderPage> {
     }
   }
 
-  /// Fills the two fields a pairing QR carries and stops there.
+  /// Fills the two fields a pairing QR carries, and casts straight away when
+  /// the QR names the server this app was built for.
   ///
-  /// Deliberately not a cast. The server address decides where this
-  /// screen is sent, and a QR is printed by whoever printed it: scanning
-  /// one and mirroring immediately would put a screen on a stranger's
-  /// relay before its owner had read the host it was going to. The status
-  /// line names that host, and Start stays where it was.
+  /// Only then. The server address decides where this screen is sent, and a
+  /// QR is printed by whoever printed it: mirroring at once to any host it
+  /// names would put a screen on a stranger's relay before its owner had read
+  /// where it was going. On the built-in server a scan pairs with nothing a
+  /// typed code could not, and Android's own capture dialog still comes
+  /// first. Anywhere else the status line names the host and Start waits.
   Future<void> _scan() async {
     final payload = await Navigator.of(context).push<PairingPayload>(
       MaterialPageRoute(builder: (_) => const ScanPage()),
     );
     if (payload == null || !mounted) return;
+    final trusted = payload.isOn(_defaultSignalUrl);
     setState(() {
       _code.text = payload.code;
       _signalUrl = payload.url;
-      _status = 'Scanned ${Uri.parse(payload.url).host} — press Start to mirror';
+      if (!trusted) {
+        _status = 'Scanned ${Uri.parse(payload.url).host} — press Start to mirror';
+      }
     });
+    if (trusted) await _castOverNetwork();
   }
 
   Future<void> _castOverUsb() async {
