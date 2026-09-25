@@ -416,11 +416,21 @@ start_recording (App *self)
   gchar *stamp = g_date_time_format_iso8601 (now);
   g_date_time_unref (now);
   g_strdelimit (stamp, ":", '-');
-  gchar *name = g_strdup_printf ("aircast-%s.mkv", stamp);
+  gchar *name = g_strdup_printf ("kagami-%s.mkv", stamp);
   g_free (stamp);
   g_free (self->record_file);
-  self->record_file = g_build_filename (
-      self->record_dir ? self->record_dir : g_get_home_dir (), name, NULL);
+  /* The Videos folder, not the home directory. It is where a recording is
+   * looked for, and it is resolved from the known-folder API rather than from
+   * the environment: g_get_home_dir honours HOME, and a Git Bash launch hands
+   * over HOME=/c/Users/<name>, which Windows reads as C:\c\Users\<name> --
+   * a folder that does not exist, so filesink fails to open and the record
+   * button presses into nothing. */
+  const gchar *dir = self->record_dir;
+  if (!dir)
+    dir = g_get_user_special_dir (G_USER_DIRECTORY_VIDEOS);
+  if (!dir)
+    dir = g_get_home_dir ();
+  self->record_file = g_build_filename (dir, name, NULL);
   g_free (name);
 
   gchar *escaped = g_strescape (self->record_file, NULL);
@@ -642,6 +652,28 @@ remaximize (gpointer window)
   return G_SOURCE_REMOVE;
 }
 
+/* Diagnostic, and temporary. The reading taken inside notify::fullscreened is
+ * taken mid-transition -- the window is still the fullscreen's size -- so it
+ * cannot say where the layout settles. This one runs after the dust does. */
+static gboolean
+log_settled_geometry (gpointer window)
+{
+  GtkWidget *content = gtk_window_get_child (GTK_WINDOW (window));
+  g_message ("settled: window %dx%d, child allocated %d, maximized=%d",
+      gtk_widget_get_width (GTK_WIDGET (window)),
+      gtk_widget_get_height (GTK_WIDGET (window)),
+      content ? gtk_widget_get_height (content) : -1,
+      gtk_window_is_maximized (GTK_WINDOW (window)));
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+maximize_later (gpointer window)
+{
+  gtk_window_maximize (GTK_WINDOW (window));
+  return G_SOURCE_REMOVE;
+}
+
 static gboolean
 restore_maximized (gpointer window)
 {
@@ -700,7 +732,23 @@ on_fullscreen_changed (GObject *window, GParamSpec *pspec, App *self)
         content ? gtk_widget_get_height (content) : -1,
         gtk_window_is_maximized (GTK_WINDOW (window)), self->was_maximized);
 
-    if (self->was_maximized) {
+    /* KAGAMI_FS_RESTORE: none | maximize | dance (the default). Diagnostic,
+     * so the three candidates can be told apart in one build instead of one
+     * build each: none leaves the restore to GDK and Windows, maximize is what
+     * this code did before the dance, and dance is unmaximize-then-maximize. */
+    const gchar *mode = g_getenv ("KAGAMI_FS_RESTORE");
+    if (!mode)
+      mode = "dance";
+    g_message ("left fullscreen: restore mode %s", mode);
+    g_timeout_add_full (G_PRIORITY_DEFAULT, 1500, log_settled_geometry,
+        g_object_ref (window), g_object_unref);
+    if (self->was_maximized && g_str_equal (mode, "none")) {
+      self->was_maximized = FALSE;
+    } else if (self->was_maximized && g_str_equal (mode, "maximize")) {
+      self->was_maximized = FALSE;
+      g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, maximize_later,
+          g_object_ref (window), g_object_unref);
+    } else if (self->was_maximized) {
       self->was_maximized = FALSE;
       /* Not from here. This handler runs inside gtk_window_unfullscreen, and
        * asking for another window state while GDK is still settling the last
@@ -2894,7 +2942,7 @@ main (int argc, char *argv[])
     { "code", 'c', 0, G_OPTION_ARG_STRING, &self.code,
         "6-digit pairing code (generated and shown if omitted)", "CODE" },
     { "record-dir", 'r', 0, G_OPTION_ARG_FILENAME, &self.record_dir,
-        "Where the record button writes .mkv files (default: home)", "DIR" },
+        "Where the record button writes .mkv files (default: Videos)", "DIR" },
     { "latency", 'l', 0, G_OPTION_ARG_INT, &self.latency_ms,
         "Jitter buffer in ms, and turns off the automatic choice. Left out, "
         "the path chooses: " G_STRINGIFY (AIRCAST_LATENCY_DIRECT) " on a "
