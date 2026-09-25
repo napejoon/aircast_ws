@@ -177,6 +177,23 @@ mark (const gchar *what)
       (g_get_monotonic_time () - startup_us) / 1e6);
 }
 
+#ifdef G_OS_WIN32
+/* Experiment, measured before it is kept. With G_MESSAGES_DEBUG=all the first
+ * thing gtk_init does is start GIO reading HKEY_CLASSES_ROOT -- every file
+ * association and UWP app on the machine -- and the display is not ready until
+ * 0.8 s after that read begins, out of the 0.96 s gtk_init takes. Asking for an
+ * app association here, on a thread of its own, starts the same read while
+ * gst_init and the Direct3D probe run, so whatever gtk_init waits on is further
+ * along by the time it asks. The answer itself is thrown away. */
+static gpointer
+warm_app_associations (gpointer data)
+{
+  GAppInfo *info = g_app_info_get_default_for_type ("text/plain", FALSE);
+  g_clear_object (&info);
+  return NULL;
+}
+#endif
+
 /* Run before anything else in main(), and specifically before
  * g_option_context_parse(), because gst_init() runs inside it and the registry
  * scan is the largest LoadLibrary surface in the process.
@@ -2935,6 +2952,10 @@ main (int argc, char *argv[])
     if (g_str_equal (argv[i], "--prebuild-registry"))
       prebuild = TRUE;
   harden_environment (prebuild);
+#ifdef G_OS_WIN32
+  if (!g_getenv ("KAGAMI_NO_WARM"))
+    g_thread_unref (g_thread_new ("warm-app-associations", warm_app_associations, NULL));
+#endif
 
   GOptionEntry entries[] = {
     { "signal", 's', 0, G_OPTION_ARG_STRING, &self.signal_url,
