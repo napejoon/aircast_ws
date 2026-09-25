@@ -43,4 +43,17 @@ class PairingPayload {
 
     return PairingPayload(code: code, url: url);
   }
+
+  /// Whether this QR points at [server]: same scheme, host and port.
+  ///
+  /// What decides whether a scan may start the cast by itself. A QR naming the
+  /// server this app was built for can only pair it with a receiver on that
+  /// server, which is what typing its code does anyway; one naming any other
+  /// host would send the screen to a relay somebody else runs, so that one
+  /// still waits for Start with the host on the status line.
+  bool isOn(String server) {
+    final a = Uri.parse(url);
+    final b = Uri.tryParse(server);
+    return b != null && a.scheme == b.scheme && a.host == b.host && a.port == b.port;
+  }
 }
