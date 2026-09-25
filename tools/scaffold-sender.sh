@@ -16,28 +16,6 @@ flutter create --platforms=android,ios --org io.kagami --project-name kagami_sen
 # The scaffold drops in a widget test for a MyApp that is not ours.
 rm -f test/widget_test.dart
 
-# Gradle signs debug builds with ~/.android/debug.keystore and generates one if
-# it finds none. Every CI runner is a fresh machine, so every debug APK this
-# project has ever published was signed by a key that existed for one build --
-# and Android refuses to update a package whose signature changed, so the APK
-# ci.yml calls "the one a maintainer hands someone to try" could only ever be
-# installed by uninstalling the last one first. INSTALL_FAILED_UPDATE_INCOMPATIBLE.
-#
-# So the key is committed and copied into place. It is Android's own debug key,
-# parameters and all -- alias androiddebugkey, password "android", the same
-# values on every machine with an SDK -- so it is not a secret and is not
-# treated as one. What keeps it out of a release is the signingConfig deletion
-# below, which fails the build if Gradle still signs release at all.
-#
-# Only when there is none: a developer's own debug key is theirs, and a script
-# that overwrites it would break every other Android app they have installed
-# from their own machine.
-if [ ! -f "$HOME/.android/debug.keystore" ]; then
-  mkdir -p "$HOME/.android"
-  cp android/debug.keystore "$HOME/.android/debug.keystore"
-  echo "installed the committed debug key at ~/.android/debug.keystore"
-fi
-
 cd android/app
 
 # `sed -i` exits 0 when it matches nothing, so an unchecked patch does not fail
@@ -73,4 +51,30 @@ if grep -qE 'signingConfig[[:space:]]*=' build.gradle.kts; then
   exit 1
 fi
 
-grep -nE 'minSdk|compileSdk|targetSdk' build.gradle.kts
+# Debug builds are signed with the committed key, named in Gradle rather than
+# left for Gradle to find.
+#
+# Every CI runner is a fresh machine, and Android refuses to update a package
+# whose signature changed -- so the APK ci.yml calls "the one a maintainer hands
+# someone to try" could only be installed by uninstalling the last one first:
+# INSTALL_FAILED_UPDATE_INCOMPATIBLE. The first fix copied the committed key to
+# ~/.android/debug.keystore, and CI logged the copy on every run -- and the APKs
+# went on carrying different signatures anyway. Gradle does not look there on
+# the runner: which debug.keystore the Android plugin opens depends on
+# ANDROID_USER_HOME, ANDROID_SDK_HOME and the image the runner happens to be,
+# and two builds of the same branch a week apart landed on different ones.
+# Naming the file in signingConfigs takes the environment out of the answer.
+#
+# It is Android's own debug key, parameters and all -- alias androiddebugkey,
+# password "android", the values every SDK generates -- so it is not a secret
+# and is not treated as one. What keeps it away from a release is the
+# signingConfig deletion above, which fails the build if Gradle still signs
+# release builds at all; this block only modifies the debug config that
+# already exists and assigns it to nothing.
+sed -i 's|^android {$|android {\n    signingConfigs {\n        getByName("debug") {\n            storeFile = file("../debug.keystore")\n            storePassword = "android"\n            keyAlias = "androiddebugkey"\n            keyPassword = "android"\n        }\n    }|' build.gradle.kts
+grep -qF 'storeFile = file("../debug.keystore")' build.gradle.kts || {
+  echo "scaffold moved: 'android {' is no longer a line of its own in android/app/build.gradle.kts" >&2
+  exit 1
+}
+
+grep -nE 'minSdk|compileSdk|targetSdk|debug.keystore' build.gradle.kts
