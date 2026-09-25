@@ -735,6 +735,19 @@ static gboolean
 on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint code,
     GdkModifierType state, App *self)
 {
+  /* The letters are matched by key, not by the character the layout puts on
+   * it. With the Thai layout active R types พ and F types ด, so keyval was never
+   * GDK_KEY_r and every letter shortcut was dead while F11 went on working.
+   * gdk_key_event_matches falls back to where the key sits in the other
+   * installed layouts, which is how GTK's own accelerators survive a layout
+   * switch. */
+  static const guint letters[] = { GDK_KEY_f, GDK_KEY_r, GDK_KEY_d };
+  GdkEvent *event = gtk_event_controller_get_current_event (
+      GTK_EVENT_CONTROLLER (controller));
+  for (guint i = 0; event && i < G_N_ELEMENTS (letters); i++)
+    if (gdk_key_event_matches (event, letters[i], 0) != GDK_KEY_MATCH_NONE)
+      keyval = letters[i];
+
   switch (keyval) {
     case GDK_KEY_f:
     case GDK_KEY_F:
