@@ -34,6 +34,9 @@
  */
 
 #include <gtk/gtk.h>
+#ifdef G_OS_WIN32
+#include <gdk/win32/gdkwin32.h>
+#endif
 #include <qrencode.h>
 #include <gst/gst.h>
 #include <gst/sdp/sdp.h>
@@ -691,6 +694,17 @@ maximize_later (gpointer window)
   return G_SOURCE_REMOVE;
 }
 
+#ifdef G_OS_WIN32
+static gboolean
+maximize_native (gpointer window)
+{
+  GdkSurface *surface = gtk_native_get_surface (GTK_NATIVE (window));
+  if (surface)
+    ShowWindow ((HWND) gdk_win32_surface_get_handle (surface), SW_MAXIMIZE);
+  return G_SOURCE_REMOVE;
+}
+#endif
+
 static gboolean
 restore_maximized (gpointer window)
 {
@@ -765,6 +779,16 @@ on_fullscreen_changed (GObject *window, GParamSpec *pspec, App *self)
       self->was_maximized = FALSE;
       g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, maximize_later,
           g_object_ref (window), g_object_unref);
+    } else if (self->was_maximized && g_str_equal (mode, "late")) {
+      self->was_maximized = FALSE;
+      g_timeout_add_full (G_PRIORITY_DEFAULT, 500, maximize_later,
+          g_object_ref (window), g_object_unref);
+#ifdef G_OS_WIN32
+    } else if (self->was_maximized && g_str_equal (mode, "native")) {
+      self->was_maximized = FALSE;
+      g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, maximize_native,
+          g_object_ref (window), g_object_unref);
+#endif
     } else if (self->was_maximized) {
       self->was_maximized = FALSE;
       /* Not from here. This handler runs inside gtk_window_unfullscreen, and
