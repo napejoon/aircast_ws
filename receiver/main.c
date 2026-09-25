@@ -34,6 +34,9 @@
  */
 
 #include <gtk/gtk.h>
+#ifdef G_OS_WIN32
+#include <gdk/win32/gdkwin32.h>
+#endif
 #include <qrencode.h>
 #include <gst/gst.h>
 #include <gst/sdp/sdp.h>
@@ -416,11 +419,21 @@ start_recording (App *self)
   gchar *stamp = g_date_time_format_iso8601 (now);
   g_date_time_unref (now);
   g_strdelimit (stamp, ":", '-');
-  gchar *name = g_strdup_printf ("aircast-%s.mkv", stamp);
+  gchar *name = g_strdup_printf ("kagami-%s.mkv", stamp);
   g_free (stamp);
   g_free (self->record_file);
-  self->record_file = g_build_filename (
-      self->record_dir ? self->record_dir : g_get_home_dir (), name, NULL);
+  /* The Videos folder, not the home directory. It is where a recording is
+   * looked for, and it is resolved from the known-folder API rather than from
+   * the environment: g_get_home_dir honours HOME, and a Git Bash launch hands
+   * over HOME=/c/Users/<name>, which Windows reads as C:\c\Users\<name> --
+   * a folder that does not exist, so filesink fails to open and the record
+   * button presses into nothing. */
+  const gchar *dir = self->record_dir;
+  if (!dir)
+    dir = g_get_user_special_dir (G_USER_DIRECTORY_VIDEOS);
+  if (!dir)
+    dir = g_get_home_dir ();
+  self->record_file = g_build_filename (dir, name, NULL);
   g_free (name);
 
   gchar *escaped = g_strescape (self->record_file, NULL);
@@ -608,48 +621,26 @@ on_fullscreen_clicked (GtkButton *button, App *self)
 
 /* Deferred out of notify::fullscreened; see the call site for why.
  *
- * Unmaximize first, and this is the fix for a window that came back from
- * fullscreen with its bottom under the taskbar. GTK still holds the maximized
- * state flag across the fullscreen, so gtk_window_maximize on its own is a
- * no-op: nothing recomputes the geometry, and what is left is a window the
- * size of the fullscreen -- 2576x1431 measured on a 2560x1440 screen whose
- * work area ends at 1392. The 39 px hanging past it is the connection strip,
- * which is what the user sees sliced off along the taskbar.
- *
- * Dropping the flag first makes the maximize real, and Windows recomputes from
- * the work area rather than from the size the window happened to have.
- *
- * The size is logged because the last two bugs on this path were found by
- * measuring the window from outside the process, which is a slow way to learn
- * something the program already knows. */
-static gboolean
-remaximize (gpointer window)
-{
-  gtk_window_maximize (GTK_WINDOW (window));
-  /* Both numbers, because they answer different questions: the size says
-   * whether the window came back to the work area, and the minimum says
-   * whether it could have. A minimum taller than the screen is a window the
-   * user cannot drag smaller -- the pointer pulls and nothing moves, or the
-   * title bar drags the whole window down instead. */
-  GtkWidget *child = gtk_window_get_child (GTK_WINDOW (window));
-  int min_h = 0, nat_h = 0;
-  if (child)
-    gtk_widget_measure (child, GTK_ORIENTATION_VERTICAL,
-        gtk_widget_get_width (GTK_WIDGET (window)), &min_h, &nat_h, NULL, NULL);
-  g_message ("left fullscreen: window %dx%d, content wants at least %d (natural %d)",
-      gtk_widget_get_width (GTK_WIDGET (window)),
-      gtk_widget_get_height (GTK_WIDGET (window)), min_h, nat_h);
-  return G_SOURCE_REMOVE;
-}
-
+ * ShowWindow rather than gtk_window_maximize, and this is the fix for a window
+ * that came back from fullscreen with its bottom under the taskbar. With the
+ * native title bar (GTK_CSD=0) GDK's maximize sizes the client area to the
+ * work area and then puts the title bar on top of it: 2560x1392 of client on a
+ * screen whose work area is 1392 tall, so the bottom 23 px -- the connection
+ * strip -- sat under the taskbar. A plain maximize, one deferred by half a
+ * second, and unmaximize-then-maximize all measured the same 1392. Asking
+ * Windows to maximize the frame itself measured 2560x1369, and the strip is
+ * whole. Leaving the restore to GTK brings back 1100x760, not maximized. */
 static gboolean
 restore_maximized (gpointer window)
 {
-  gtk_window_unmaximize (GTK_WINDOW (window));
-  /* One more turn, for the same reason this one is deferred: two window state
-   * changes in a row is what crashed the win32 backend before. */
-  g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, remaximize,
-      g_object_ref (window), g_object_unref);
+#ifdef G_OS_WIN32
+  GdkSurface *surface = gtk_native_get_surface (GTK_NATIVE (window));
+  if (surface) {
+    ShowWindow ((HWND) gdk_win32_surface_get_handle (surface), SW_MAXIMIZE);
+    return G_SOURCE_REMOVE;
+  }
+#endif
+  gtk_window_maximize (GTK_WINDOW (window));
   return G_SOURCE_REMOVE;
 }
 
@@ -683,6 +674,13 @@ on_fullscreen_changed (GObject *window, GParamSpec *pspec, App *self)
     gtk_widget_add_css_class (self->window, "immersive");
   } else {
     gtk_widget_remove_css_class (self->window, "immersive");
+    /* Unconditional, because the round of this bug before last was chased
+     * with a message that printed only inside the branch below -- the branch
+     * never ran, and the log said nothing at all. */
+    g_message ("left fullscreen: window %dx%d, maximized=%d, was_maximized=%d",
+        gtk_widget_get_width (GTK_WIDGET (window)),
+        gtk_widget_get_height (GTK_WIDGET (window)),
+        gtk_window_is_maximized (GTK_WINDOW (window)), self->was_maximized);
     if (self->was_maximized) {
       self->was_maximized = FALSE;
       /* Not from here. This handler runs inside gtk_window_unfullscreen, and
@@ -1371,6 +1369,32 @@ on_message (SoupWebsocketConnection *ws, gint type, GBytes *bytes, App *self)
   } else if (g_str_equal (kind, "peer")) {
     /* A new phone: an echo that never arrived must not swallow its bye. */
     self->disconnecting = FALSE;
+    /* And the old one may still be here. A phone killed from Recents, out of
+     * battery or force-stopped sends no bye, and the server does not say it
+     * left, so the next phone's offer was set on the dead one's webrtcbin --
+     * "set remote offer in the stable state", an answer carrying the old DTLS
+     * certificate, the new phone stuck in ICE checking, and 14 s later the
+     * failure that ended both. A remote description is what says a cast was
+     * already negotiated here; a receiver that joined after the phone has
+     * none yet, and keeps the pipeline "joined" has just built.
+     *
+     * A phone that rejoins without having died is covered too: it answers
+     * "peer" with an ICE restart (sender/lib/session.dart _reoffer), which is
+     * exactly what a fresh webrtcbin needs -- the receiver-rejoin case.
+     *
+     * ponytail: a recording in progress holds the old pipeline ~700 ms for its
+     * index (drop_pending), and an offer inside that window still lands on the
+     * old webrtcbin, so that one cast fails and the next press works. Stash the
+     * offer until drop_record_branch finishes if that ever shows up. */
+    GstWebRTCSessionDescription *remote = NULL;
+    if (self->webrtc)
+      g_object_get (self->webrtc, "remote-description", &remote, NULL);
+    if (remote) {
+      gst_webrtc_session_description_free (remote);
+      g_message ("a new phone while the last cast was still up: dropping it");
+      show_page (self, "idle");
+      drop_session (self);
+    }
     set_status (self, "A phone is connecting…");
   } else if (g_str_equal (kind, "offer")) {
     on_offer (self, json_object_get_string_member (msg, "sdp"));
@@ -2877,7 +2901,7 @@ main (int argc, char *argv[])
     { "code", 'c', 0, G_OPTION_ARG_STRING, &self.code,
         "6-digit pairing code (generated and shown if omitted)", "CODE" },
     { "record-dir", 'r', 0, G_OPTION_ARG_FILENAME, &self.record_dir,
-        "Where the record button writes .mkv files (default: home)", "DIR" },
+        "Where the record button writes .mkv files (default: Videos)", "DIR" },
     { "latency", 'l', 0, G_OPTION_ARG_INT, &self.latency_ms,
         "Jitter buffer in ms, and turns off the automatic choice. Left out, "
         "the path chooses: " G_STRINGIFY (AIRCAST_LATENCY_DIRECT) " on a "
