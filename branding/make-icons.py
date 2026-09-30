@@ -15,6 +15,7 @@ It writes, from a 2048 px master rendered with 4x supersampling:
 
     branding/kagami.svg                     the source of truth for print
     installer/kagami.ico                    exe resource, MSI, shortcut
+    installer/kagami.icns                   the macOS .app
     receiver/icons/kagami-256.png           hicolor, for the GTK window
     sender/android/app/src/main/res/mipmap-*/ic_launcher.png
     sender/ios/Kagami/AppIcon.appiconset/   one 1024 px square; iOS draws the rest
@@ -179,6 +180,15 @@ def main() -> None:
 
     png(img, 256, ROOT / "receiver" / "icons" / "kagami-256.png")
 
+    # macOS: the rounded tile as it is, on a transparent 1024 canvas with the
+    # margin Apple's grid gives an app icon (824 of 1024), so it sits the same
+    # size as its neighbours in the Dock. Pillow writes every .icns size from it.
+    mac = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+    mac.paste(img.resize((824, 824), Image.LANCZOS), (100, 100))
+    icns = ROOT / "installer" / "kagami.icns"
+    mac.save(icns)
+    print("  installer/kagami.icns  16..1024")
+
     # Android's five densities. Legacy launcher icons, because the adaptive
     # kind needs a foreground that survives being masked to a circle, and this
     # mark is already a circle -- masking it would eat the seam.
@@ -194,7 +204,7 @@ def main() -> None:
     ios = ROOT / "sender" / "ios" / "Kagami" / "AppIcon.appiconset"
     ios.mkdir(parents=True, exist_ok=True)
     master(radius=0).resize((1024, 1024), Image.LANCZOS).convert("RGB").save(ios / "Icon-1024.png")
-    (ios / "Contents.json").write_text(IOS_CONTENTS, encoding="utf-8")
+    (ios / "Contents.json").write_text(IOS_CONTENTS, encoding="utf-8", newline="\n")
     print("  sender/ios/Kagami/AppIcon.appiconset  1024px")
 
 
