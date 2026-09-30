@@ -64,6 +64,16 @@ for f in "$M"/* "$R"/lib/gstreamer-1.0/* "$R"/lib/gio/modules/*; do args+=(-x "$
 dylibbundler --overwrite-dir --bundle-deps --no-codesign \
   -s "$BREW/lib" -s "$GST/lib" -s "$GST/lib/gstreamer-1.0" \
   -d "$F" -p @executable_path/../Frameworks/ "${args[@]}" >/dev/null
+# dylibbundler rewrites what the plugins load, not what they call themselves:
+# each still carries its Homebrew path as its own install name. Nothing loads a
+# plugin by that name, but it is the one string that would, and the leak check
+# below is only worth having if it can say "none" and mean it.
+for f in "$R"/lib/gstreamer-1.0/* "$R"/lib/gio/modules/*; do
+  # Only a dylib has an install name; a loadable bundle (MH_BUNDLE) has none.
+  if otool -D "$f" | tail -n +2 | grep -q .; then
+    install_name_tool -id "@executable_path/../${f#"$C"/}" "$f" 2>/dev/null
+  fi
+done
 
 glib-compile-schemas --targetdir="$R/share/glib-2.0/schemas" "$BREW/share/glib-2.0/schemas"
 gio-querymodules "$R/lib/gio/modules" || true
