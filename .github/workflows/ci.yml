@@ -214,15 +214,26 @@ jobs:
           sleep 2
           dist/Kagami.app/Contents/MacOS/kagami --signal ws://127.0.0.1:8453 --insecure \
             --code 424242 > receiver.log 2>&1 &
-          sleep 8
+          # Joined within seconds, as it is on Windows -- two earlier runs here
+          # connected, sent nothing for 40 s until the server's ping timeout
+          # closed the socket, and only joined on the reconnect. If it happens
+          # again, `sample` says where every thread of the app is waiting.
+          for _ in $(seq 1 15); do grep -q "receiver joined" server.log && break; sleep 1; done
+          if ! grep -q "receiver joined" server.log; then
+            sample "$(pgrep -f Kagami.app/Contents/MacOS/kagami | head -1)" 3 -file sample.txt || true
+            echo "the receiver did not join within 15 s of starting"; joined_late=1
+          fi
+          for _ in $(seq 1 60); do grep -q "receiver joined" server.log && break; sleep 1; done
           python tools/fake_sender.py --signal ws://127.0.0.1:8453 --code 424242 \
-            --seconds 40 > sender.log 2>&1 &
+            --seconds 60 > sender.log 2>&1 &
           for _ in $(seq 1 60); do grep -q "jitter buffer" receiver.log && break; sleep 1; done
           sleep 6
           screencapture -x cast.png || true
           pkill -f Kagami.app/Contents/MacOS/kagami || true
           echo "--- receiver.log"; cat receiver.log
+          echo "--- server.log"; cat server.log
           grep -q "jitter buffer" receiver.log
+          [ -z "${joined_late:-}" ]
 
           dist/Kagami.app/Contents/MacOS/kagami > tls.log 2>&1 &
           for _ in $(seq 1 60); do grep -q "signalling:" tls.log && break; sleep 1; done
@@ -251,6 +262,7 @@ jobs:
           path: |
             cast.png
             idle.png
+            sample.txt
             receiver.log
             sender.log
             server.log
