@@ -40,3 +40,46 @@ AIRCAST_TURN_TTL=43200   # TURN credential: must outlive the longest session, no
 
 `ProtectSystem=strict` in the unit means `/opt/aircast` is read-only to the
 service, which is what we want — it writes nothing.
+
+## Deploy with Docker
+
+The same server, same `/etc/aircast/signal.env`, same `127.0.0.1:8443`; nginx
+and coturn stay on the host untouched. `compose.yaml` says why it uses the
+host's network rather than a port mapping — a mapped port would make the join
+throttle count every user as one address.
+
+From a checkout, copy the four files the image needs:
+
+```bash
+ssh vps mkdir -p /opt/aircast/docker
+scp server/{Dockerfile,compose.yaml,.dockerignore,aircast_signal.py,smoke.py} vps:/opt/aircast/docker/
+```
+
+On the VPS — build, then try the image **beside** the live server first, on
+8453, where nothing routes to it:
+
+```bash
+cd /opt/aircast/docker
+docker compose build
+docker run -d --rm --name kagami-signal-try --network host --read-only --cap-drop ALL \
+  --env-file /etc/aircast/signal.env -e AIRCAST_PORT=8453 kagami-signal
+/opt/aircast/venv/bin/python smoke.py ws://127.0.0.1:8453     # ok: paired through ...
+docker stop kagami-signal-try
+```
+
+Then swap. The gap between the two lines is the only downtime, about a second:
+
+```bash
+systemctl disable --now aircast-signal && docker compose up -d
+/opt/aircast/venv/bin/python smoke.py ws://127.0.0.1:8443
+docker logs --tail 20 kagami-signal
+```
+
+Rollback, if a real cast then fails:
+
+```bash
+docker compose down && systemctl enable --now aircast-signal
+```
+
+Logs are `docker logs kagami-signal` now, not `journalctl -u aircast-signal`.
+An update is the `scp` above, then `docker compose up -d --build`.
