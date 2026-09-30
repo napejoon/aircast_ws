@@ -1,6 +1,6 @@
 # Kagami — งานค้าง / open work
 
-**อัปเดตล่าสุด:** 2026-09-25 · **สถานะ:** main อยู่ที่ `3e472ed` = tag `v0.1.11` (draft) ติดตั้งใช้งานจริงแล้วทั้ง Windows (MSI) และ tablet (CI debug APK) ไม่มี branch ค้าง merge
+**อัปเดตล่าสุด:** 2026-09-30 · **สถานะ:** main อยู่ที่ `3e472ed` = tag `v0.1.11` (draft) ติดตั้งใช้งานจริงแล้วทั้ง Windows (MSI) และ tablet (CI debug APK) ไม่มี branch ค้าง merge
 
 ## ทำอะไรอยู่ / What this is
 
@@ -56,16 +56,15 @@ CI เขียวไม่ได้แปลว่าใช้ได้ ต้�
 3. **code-signing Windows: ผู้ใช้ตัดทางซื้อ cert แล้ว ("แพงมาก")** — ปล่อย MSI แบบไม่เซ็น ผู้ใช้เจอ
    SmartScreen ต้องกด More info → Run anyway ทางฟรีที่พูดถึงแต่**ยังไม่ได้ตรวจเงื่อนไข**: SignPath Foundation
    (OSS, repo ต้อง public) และ MSIX ผ่าน Store (MSIX ไม่มี custom action → registry prebuild ต้องคิดใหม่)
-   เสนอเขียนวิธีกดผ่าน SmartScreen ลง README ไว้ ผู้ใช้ยังไม่ตอบ
+   README มีส่วน **Installing** แล้ว (เช็ค `Get-FileHash` เทียบ release ก่อน Run anyway)
 4. **ข้อจำกัดที่รู้แล้ว (ไม่ใช่บั๊กที่ต้องรีบ)**
    - มือถือตายระหว่าง**กำลังอัด**แล้ว cast ใหม่ภายใน ~700 ms: offer ลง webrtcbin เก่าที่รอปิดไฟล์อยู่
      → cast นั้นล้มหนึ่งครั้ง กดใหม่ได้ (มี comment `ponytail:` ใน `on_message` "peer" บอกวิธีแก้)
    - จอมือถือนิ่ง = MediaProjection ไม่ส่งเฟรม → ไฟล์อัดมีแค่ keyframe เดียว เป็นพฤติกรรมปกติ
    - "Negotiating…" ค้างบน toolbar ที่เคยเห็น น่าจะเป็นบั๊ก cast ซ้ำตัวเดียวกัน **ยังไม่ได้ยืนยันแยก**
+     (2026-09-30 จะเทสต์แต่ tablet ไม่ได้เสียบ USB — `tools/tablet/verify.sh` แล้วดูข้อความบน toolbar)
    - debug APK จาก CI มี `versionName=0.1.0` เสมอ (ไม่รับเลข tag)
-5. **branch `diag/fullscreen-geometry` บน remote** — build diag (knob `KAGAMI_FS_RESTORE`, thread อุ่น GIO)
-   ถูกแทนด้วย PR #63 แล้ว ลบได้
-6. **macOS / iOS ยังไม่เริ่ม** — ดูบันทึกรอบก่อนใน git history ของไฟล์นี้ (`git log -p HANDOFF.md`)
+5. **macOS / iOS ยังไม่เริ่ม** — ดูบันทึกรอบก่อนใน git history ของไฟล์นี้ (`git log -p HANDOFF.md`)
 
 ## วิธีเริ่ม / How to pick it up
 
@@ -84,16 +83,16 @@ env -u HOME ext/PFiles64/Kagami/bin/kagami.exe --prebuild-registry   # ครั
 env -u HOME GST_DEBUG=webrtcbin:4 ext/PFiles64/Kagami/bin/kagami.exe --code 424242 > run.log 2>&1 &
 ```
 
-**ชุดสคริปต์ทดสอบกับ tablet อยู่ใน `%TEMP%\kagami-work\` — ไม่ได้อยู่ใน git** (`cast.sh` สั่ง tablet
-พิมพ์รหัส 424242 + กดยอมแชร์จอ, `key3.ps1` ส่งปุ่มด้วย PostMessage+scan code, `key.ps1` F11,
-`cap.ps1` จับภาพด้วย PrintWindow, `verify63c.sh` เทสต์ครบชุด recast/อัด/fullscreen) ถ้าหายต้องเขียนใหม่
+**ชุดสคริปต์ทดสอบกับ tablet อยู่ใน `tools/tablet/`** (`verify.sh [kagami.exe]` เทสต์ครบชุด recast/อัด/fullscreen,
+`cast.sh` สั่ง tablet พิมพ์รหัส 424242 + กดยอมแชร์จอ — พิกัด tap ผูกกับ tablet 2304x1440,
+`key.ps1` ส่งปุ่มด้วย PostMessage+scan code, `cap.ps1` จับภาพด้วย PrintWindow)
 
 **กับดัก — อ่านก่อนลงมือ** (ฉบับเต็มใน `.claude/memory/kagami-verify-loop.md`)
 
 - **sender ที่ค้าง cast จากเทสต์ก่อนจะต่อเข้า receiver ตัวใหม่เอง** แล้ว `cast.sh` ไป force-stop มัน
   ดูเหมือน cast หลุด — force-stop sender ก่อนเริ่มทุกรอบ (รอบนี้เสียเวลาไล่ "cast หลุด" ไปหลายรอบเพราะข้อนี้
   แต่มันก็พาไปเจอบั๊กจริงของ recast)
-- **แป้นพิมพ์เครื่องนี้เป็นไทย** — `keybd_event`/SetForegroundWindow ส่งตัวอักษรไม่ถึง GTK ใช้ `key3.ps1`
+- **แป้นพิมพ์เครื่องนี้เป็นไทย** — `keybd_event`/SetForegroundWindow ส่งตัวอักษรไม่ถึง GTK ใช้ `tools/tablet/key.ps1`
 - **จอ tablet นิ่ง = อัดได้เฟรมเดียว** เทสต์อัดต้องขยับจอ: `adb shell cmd statusbar expand-notifications` / `collapse`
   แล้วเช็คด้วย `ffprobe -show_packets`
 - **รันจาก Git Bash ต้อง `env -u HOME`** ไม่งั้น `HOME=/c/Users/...` หลุดเข้า GLib

@@ -22,6 +22,7 @@ The traps, each of which cost a cycle:
   is refused for a process that is not already in front, so AppActivate captures the wrong window.
 - **CI debug APKs are signed with the committed `sender/android/debug.keystore`** since PR #62
   (2026-09-25), so `adb install -r` updates in place. Release APKs are unsigned and do not install.
+- **The tablet harness is `tools/tablet/`** (`verify.sh`, `cast.sh`, `key.ps1`, `cap.ps1`).
 - **Test a receiver build without installing it:** `msiexec /a <msi> /qn TARGETDIR=<dir>` extracts
   it (no UAC), then run `<dir>/PFiles64/Kagami/bin/kagami.exe --prebuild-registry` once — the
   extracted copy has no registry and its first launch is slow enough to look like a hang.
@@ -30,7 +31,7 @@ The traps, each of which cost a cycle:
   and `cast.sh` then force-stops it: that looks like the cast dropping. Force-stop the sender
   between runs.
 - **Letter keys:** the keyboard layout here is Thai, so an injected R arrives as พ. Use PostMessage
-  WM_KEYDOWN with the scan code in lParam (`kagami-work/key3.ps1`); `keybd_event` +
+  WM_KEYDOWN with the scan code in lParam (`tools/tablet/key.ps1`); `keybd_event` +
   SetForegroundWindow is unreliable. F11 via PostMessage always worked.
 - **A static phone screen sends almost no frames** (MediaProjection only emits on change), so an
   8 s recording of it can hold a single keyframe. Animate the tablet during a record test:
