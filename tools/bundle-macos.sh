@@ -75,6 +75,38 @@ for f in "$R"/lib/gstreamer-1.0/* "$R"/lib/gio/modules/*; do
   fi
 done
 
+# What dylibbundler leaves: the Rust plugins (gtk4paintablesink) reach
+# libgstreamer and friends as @rpath/..., resolved through LC_RPATH entries
+# that point into Homebrew's Cellar. It warns "MAY NOT CORRECTLY HANDLE" and
+# means it: on a Mac with Homebrew the plugin loads Homebrew's libgstreamer
+# beside the bundle's, and fails to register; on one without, it fails to load.
+# Every @rpath reference becomes the bundle's own copy, and every LC_RPATH that
+# leaves the bundle goes.
+macho=()
+while IFS= read -r -d '' f; do
+  file -b "$f" | grep -q Mach-O && macho+=("$f")
+done < <(find "$C" -type f -print0)
+unresolved=
+for f in "${macho[@]}"; do
+  id=$(otool -D "$f" | tail -n +2)
+  case "$id" in @rpath/*)
+    install_name_tool -id "@executable_path/../Frameworks/${id#@rpath/}" "$f" 2>/dev/null ;;
+  esac
+  for dep in $(otool -L "$f" | tail -n +2 | awk '{print $1}' | grep '^@rpath/' || true); do
+    [ "$dep" = "$id" ] && continue
+    name=${dep#@rpath/}
+    if [ -e "$F/$name" ]; then
+      install_name_tool -change "$dep" "@executable_path/../Frameworks/$name" "$f" 2>/dev/null
+    else
+      unresolved="$unresolved $dep(${f#"$C"/})"
+    fi
+  done
+  for rp in $(otool -l "$f" | awk '$1=="cmd"{r=($2=="LC_RPATH")} r && $1=="path"{print $2}'); do
+    install_name_tool -delete_rpath "$rp" "$f" 2>/dev/null
+  done
+done
+[ -z "$unresolved" ] || { echo "no bundled copy for:$unresolved" >&2; exit 1; }
+
 glib-compile-schemas --targetdir="$R/share/glib-2.0/schemas" "$BREW/share/glib-2.0/schemas"
 gio-querymodules "$R/lib/gio/modules" || true
 # Dereferenced (-L): a bundle carries files, not links into a Cellar that the
@@ -139,6 +171,8 @@ codesign --force --sign - "$OUT"
 leaks=$(find "$C" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) -print0 \
   | xargs -0 -n1 otool -L 2>/dev/null | grep -E "^\s+($BREW|/usr/local|/opt/homebrew)" || true)
 [ -z "$leaks" ] || { echo "still linked into Homebrew:"; echo "$leaks"; exit 1; } >&2
+rpaths=$(for f in "${macho[@]}"; do otool -l "$f" | awk -v f="${f#"$C"/}" '$1=="cmd"{r=($2=="LC_RPATH")} r && $1=="path"{print f": "$2}'; done)
+[ -z "$rpaths" ] || { echo "LC_RPATH left in the bundle:"; echo "$rpaths" | head; exit 1; } >&2
 links=$(find "$C" -type l)
 [ -z "$links" ] || { echo "symlinks left in the bundle:"; echo "$links" | head; exit 1; } >&2
 codesign --verify --deep --strict --verbose=2 "$OUT"
@@ -161,6 +195,17 @@ for el in $ELEMENTS; do
     GST_PLUGIN_SCANNER_1_0="$M/gst-plugin-scanner" GST_REGISTRY_1_0="$reg" \
     "$M/gst-inspect-1.0" "$el" >/dev/null 2>&1 || missing="$missing $el"
 done
-[ -z "$missing" ] || { echo "the bundle is missing these elements:$missing" >&2; exit 1; }
+if [ -n "$missing" ]; then
+  # Why, for the first of them: which plugin file failed to load, and the dyld
+  # or registration error that says what it wanted.
+  first=${missing%% *}; first=${first:-${missing# }}; first=${first%% *}
+  rm -f "$reg"
+  env -u GST_PLUGIN_PATH -u GST_PLUGIN_PATH_1_0 GST_DEBUG="GST_PLUGIN_LOADING:4" \
+    GST_PLUGIN_SYSTEM_PATH_1_0="$R/lib/gstreamer-1.0" \
+    GST_PLUGIN_SCANNER_1_0="$M/gst-plugin-scanner" GST_REGISTRY_1_0="$reg" \
+    "$M/gst-inspect-1.0" "$first" 2>&1 | grep -iE "fail|error|not|dlopen|image" | head -20 >&2 || true
+  echo "the bundle is missing these elements:$missing" >&2
+  exit 1
+fi
 echo "all $(echo $ELEMENTS | wc -w | tr -d ' ') elements resolve inside the bundle"
 echo "$OUT: $(du -sh "$OUT" | cut -f1), $(ls "$F" | wc -l | tr -d ' ') libraries, macOS $minos+, $(uname -m)"
