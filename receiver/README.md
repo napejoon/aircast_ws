@@ -77,6 +77,30 @@ plugins from is not writable by the user.
 Releases are **not code-signed**, so Windows shows "Windows protected your PC".
 Nothing about the format avoids that; only a certificate would.
 
+## macOS
+
+`Kagami.app` for **Apple Silicon, macOS 14 or later**, from Homebrew's GTK and
+GStreamer — `tools/bundle-macos.sh` and the `macos` job in
+`.github/workflows/ci.yml`, which builds it on macos-14 (Homebrew's bottles set
+the minimum to the OS they were built on) and packages
+`Kagami-X.Y.Z-macos-arm64.dmg`. Homebrew's `gstreamer` carries gst-plugins-rs,
+so `gtk4paintablesink` needs no cargo build there either. No Intel build: the
+bottles are single-architecture and there is no Intel runner to build one on.
+
+Inside the bundle, `harden_environment` points GStreamer, GIO, GSettings and the
+icon theme at the bundle's own copies, and installs the bundle's CA roots as the
+TLS default — Homebrew's GnuTLS looks for them under `/opt/homebrew`. CI proves
+all of it with `/opt/homebrew` moved aside: a fake phone casts to the bundled
+app, whose window is photographed, and the app reaches the real server over
+`wss://`.
+
+Install: open the DMG and drag Kagami to Applications. The app is ad hoc signed
+and **not notarised** (that takes a paid Apple Developer ID), so the first open
+is refused; **System Settings → Privacy & Security → Open Anyway**, or in a
+terminal `xattr -dr com.apple.quarantine /Applications/Kagami.app`. macOS then
+asks once to let Kagami use the local network — allow it, or casts on the same
+Wi-Fi go through the relay instead of direct.
+
 ## Casting with no app on the phone (Windows)
 
 The idle screen carries one extra line on Windows: **No app on the phone? Use
