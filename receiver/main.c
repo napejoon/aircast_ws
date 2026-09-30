@@ -319,6 +319,28 @@ harden_environment (gboolean prebuild)
       g_setenv ("GSETTINGS_SCHEMA_DIR", schemas, TRUE);
       /* Icons: the bundle's Adwaita and hicolor, and nobody else's. */
       g_setenv ("XDG_DATA_DIRS", share, TRUE);
+
+      /* And the CA roots. Homebrew's GnuTLS was built with its trust store at
+       * /opt/homebrew/etc/gnutls/cert.pem, a file a Mac without Homebrew does
+       * not have, and there every wss:// handshake would fail to verify the
+       * server. The bundle carries the Mozilla roots Homebrew ships, and they
+       * become the default database for every session in the process -- the
+       * signalling socket and the update check alike. After GIO_MODULE_DIR,
+       * because asking for the backend is what loads the module.
+       *
+       * ponytail: roots frozen at build time; each release refreshes them, and
+       * a Mac that keeps an old Kagami for years keeps old roots. */
+      gchar *ca = g_build_filename (res, "etc", "cert.pem", NULL);
+      GError *tls_error = NULL;
+      GTlsDatabase *roots = g_tls_file_database_new (ca, &tls_error);
+      if (roots) {
+        g_tls_backend_set_default_database (g_tls_backend_get_default (), roots);
+        g_object_unref (roots);
+      } else {
+        g_printerr ("no TLS roots at %s: %s\n", ca, tls_error->message);
+        g_clear_error (&tls_error);
+      }
+      g_free (ca);
       g_free (share);
       g_free (schemas);
       g_free (gio);
@@ -3206,8 +3228,6 @@ main (int argc, char *argv[])
     if (d3d11)
       FreeLibrary (d3d11);
   }
-#else
-  g_setenv ("GDK_DEBUG", "dcomp", FALSE);
 #endif
 
   mark ("the Direct3D probe done");

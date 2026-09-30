@@ -168,7 +168,10 @@ jobs:
     # (tools/bundle-macos.sh). Nobody maintaining this has a Mac, so this job is
     # also the test: the app is started from the bundle and a fake phone casts
     # to it, and it connects to the real server over TLS.
-    runs-on: macos-latest
+    #
+    # macos-14, the oldest runner there is: Homebrew's bottles target the OS
+    # they were built on, so the runner's macOS is the app's minimum.
+    runs-on: macos-14
     env:
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
     steps:
@@ -191,14 +194,21 @@ jobs:
         run: ./build/kagami --selftest
       - name: Bundle
         run: AIRCAST_VERSION="$VERSION" bash tools/bundle-macos.sh build dist/Kagami.app
-      - name: Cast to the bundled app
-        # A local server, tools/fake_sender.py as the phone, and the app run
-        # from inside the bundle -- main.c then points GStreamer, GIO and GTK
-        # at the bundle, so Homebrew being installed on the runner proves less
-        # than it would otherwise. The window is photographed for the log.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        # The runner's toolcache Python, not Homebrew's: the next step takes
+        # Homebrew away, and the server and the fake phone have to survive it.
+        with:
+          python-version: "3.12"
+      - name: Cast to the bundled app, with Homebrew gone
+        # /opt/homebrew moved aside for the length of the step: this is a Mac
+        # that has never had Homebrew, which is every user's. A local server and
+        # tools/fake_sender.py as the phone over ws://, then the real server over
+        # wss:// -- the bundle's own TLS module and CA roots, or no connection.
         run: |
-          python3 -m venv .venv && . .venv/bin/activate
+          python -m venv .venv && . .venv/bin/activate
           pip install -q -r server/requirements.txt -r tools/requirements.txt
+          sudo mv /opt/homebrew /opt/homebrew.hidden
+          trap 'pkill -f Kagami.app/Contents/MacOS/kagami; sudo mv /opt/homebrew.hidden /opt/homebrew' EXIT
           AIRCAST_TURN_SECRET=ci AIRCAST_TURN_URLS=turn:127.0.0.1:3478 AIRCAST_PORT=8453 \
             python server/aircast_signal.py > server.log 2>&1 &
           sleep 2
@@ -211,16 +221,14 @@ jobs:
           sleep 6
           screencapture -x cast.png || true
           pkill -f Kagami.app/Contents/MacOS/kagami || true
-          cat receiver.log
+          echo "--- receiver.log"; cat receiver.log
           grep -q "jitter buffer" receiver.log
-      - name: TLS from the bundle
-        # The real server, over wss://: glib-networking's module inside the
-        # bundle, or "TLS/SSL support not available".
-        run: |
+
           dist/Kagami.app/Contents/MacOS/kagami > tls.log 2>&1 &
-          for _ in $(seq 1 20); do grep -q "signalling:" tls.log && break; sleep 1; done
-          pkill -f Kagami.app/Contents/MacOS/kagami || true
-          cat tls.log
+          for _ in $(seq 1 60); do grep -q "signalling:" tls.log && break; sleep 1; done
+          sleep 3
+          screencapture -x idle.png || true
+          echo "--- tls.log"; cat tls.log
           grep -q "signalling: connected" tls.log
       - name: Disk image
         run: |
@@ -242,6 +250,7 @@ jobs:
           name: kagami-macos-evidence
           path: |
             cast.png
+            idle.png
             receiver.log
             sender.log
             server.log

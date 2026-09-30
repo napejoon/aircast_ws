@@ -121,6 +121,10 @@ for theme in Adwaita hicolor; do
   gtk4-update-icon-cache --force --quiet "$R/share/icons/$theme" 2>/dev/null || true
 done
 cp "$HERE/../installer/kagami.icns" "$R/kagami.icns"
+# The CA roots main.c installs as the TLS default (harden_environment says why).
+mkdir -p "$R/etc"
+cp -L "$BREW/etc/ca-certificates/cert.pem" "$R/etc/cert.pem"
+grep -q "BEGIN CERTIFICATE" "$R/etc/cert.pem" || { echo "no CA roots to bundle" >&2; exit 1; }
 
 version=${AIRCAST_VERSION:-0.0.0}
 # The oldest macOS it runs on is the newest any of its binaries was built for:
