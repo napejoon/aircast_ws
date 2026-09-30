@@ -31,6 +31,7 @@ no third-party media service in the path.
 | `docs/threat-model.md` | What the update channel defends against, and what it does not. |
 | `installer/` | The Windows MSI definition. |
 | `tools/` | A fake sender, so the receiver can be tested without a phone. |
+| `tools/tablet/` | Drives a real Android tablet over adb against a Windows receiver: cast, recast, record, fullscreen. |
 
 ## The decisions that shape everything else
 
@@ -50,6 +51,24 @@ no third-party media service in the path.
   signed by an offline key and then hands a URL to the browser, where Mark of
   the Web and SmartScreen still apply. `docs/threat-model.md` says why, and what
   that leaves exposed.
+
+## Installing
+
+**Windows.** The MSI is not code-signed — a certificate costs more than this
+project has — so the first run shows "Windows protected your PC". That dialog
+looks the same for the genuine installer and a tampered one, so check the file
+before clicking through it:
+
+```powershell
+Get-FileHash .\Kagami-X.Y.Z-x64.msi    # compare with the SHA-256 on the release page
+```
+
+Then **More info → Run anyway**. `docs/threat-model.md` (accepted residual
+risk) is why the hash is the only thing that tells the two apart.
+
+**Android.** Install `Kagami-X.Y.Z.apk` from the release and allow installs from
+your browser when Android asks. A `-unsigned.apk` beside it is the build before
+the release ceremony signed it, and does not install.
 
 ## Quickstart
 
