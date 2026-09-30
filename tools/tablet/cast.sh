@@ -10,6 +10,10 @@
 # reconnects to the next receiver on the same code by itself, and killing it
 # here is then what makes a cast look like it dropped.
 ADB="${ADB:-$(ls -d "$(cygpath -u "$LOCALAPPDATA")"/Microsoft/WinGet/Packages/Google.PlatformTools_*/platform-tools 2>/dev/null | head -1)/adb.exe}"
+# Awake and past the lock screen first: a dozing tablet takes every tap below
+# and does nothing with it. Works on a swipe lock; a PIN still needs a hand.
+"$ADB" shell input keyevent 224          # KEYCODE_WAKEUP
+"$ADB" shell wm dismiss-keyguard
 "$ADB" shell am force-stop io.kagami.kagami_sender
 "$ADB" shell am start -n io.kagami.kagami_sender/io.kagami.sender.MainActivity >/dev/null 2>&1
 sleep 4
