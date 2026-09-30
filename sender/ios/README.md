@@ -1,69 +1,79 @@
-# iOS capture
+# iOS sender
 
 Android's screen capture is one API call behind `getDisplayMedia`. iOS is not:
 capturing anything outside our own window needs a **Broadcast Upload
-Extension**, a second binary the user starts from Control Center, which talks to
-the app over an App Group socket. That boundary is the whole of the iOS work.
+Extension**, a second binary that ReplayKit starts and feeds, which passes the
+frames to the app over a socket in a shared **App Group** container. That
+boundary is the whole of the iOS work.
 
-`lib/session.dart` already asks for it — on iOS it passes
-`'video': {'deviceId': 'broadcast'}`. Without the extension present that request
-silently falls back to in-app capture, which mirrors the aircast UI and nothing
-else, so the steps below are not optional on iOS.
+Nobody maintaining this project has a Mac, so none of it is done in Xcode.
+CI's macOS runner builds it (`sender (iOS)` in `.github/workflows/ci.yml`):
 
-## Setup, once, in Xcode
+| Piece | Where |
+|---|---|
+| Extension target, App Group on both targets, embed phase | `tools/ios/add-broadcast-extension.rb` |
+| Scaffold, Info.plist keys, floor, icon, keep-alive | `tools/scaffold-ios.sh` |
+| `SampleHandler.swift`, the extension's Info.plist and entitlements | `KagamiBroadcast/` (ours) |
+| `SampleUploader`, `SocketConnection`, `DarwinNotificationCenter`, `Atomic` | fetched by the scaffold from LiveKit's `client-sdk-flutter` example at a pinned commit, hash-checked |
+| Keeping the app awake while it relays frames | `Kagami/KagamiKeepAlive.m` |
+| Ad hoc signing with entitlements, and the bundle checks | `tools/ios/package-ipa.sh` |
 
-The scaffold (`flutter create`) does not generate an extension target; it has to
-be added by hand after the scaffold exists.
+The result is the `kagami-ios-sideload` artifact: `Kagami-sideload.ipa`.
 
-1. **File → New → Target → Broadcast Upload Extension** (the variant *without*
-   UI). Name it `AircastBroadcast`. Deployment target **iOS 14 or newer**, for
-   both this target and `Runner`.
-2. **App Group**, added under *Signing & Capabilities* to **both** `Runner` and
-   `AircastBroadcast`, with the identical identifier:
+## Which iOS
 
-   ```
-   group.io.kagami.sender
-   ```
+**The floor is what Flutter and flutter_webrtc allow** — the scaffold prints it
+(`iOS floor: …`) and the IPA's `MinimumOSVersion` carries it; 13 at the time of
+writing. Below that the app cannot be built at all, by anyone. Two changes keep
+the extension from raising it: LiveKit's `os_log` string interpolation is iOS 14
+only, so the scaffold rewrites those two lines to format strings, and our
+`SampleHandler.swift` uses format strings too.
 
-3. **`Runner/Info.plist`** gets the same string:
+**Every version from the floor through iOS 27 uses the same path.** Apple
+deprecated ReplayKit's capture entry points in iOS 27 in favour of
+ScreenCaptureKit (`docs/research/transport-webrtc-vs-custom.md`); deprecated is
+not removed, and the extension still runs there. When a future iOS removes it,
+the extension, App Group and socket collapse into in-app ScreenCaptureKit
+capture with `screen-capture` in the **app's** `UIBackgroundModes` — never the
+extension's, which is an App Store rejection (`docs/research/stack-options.md` §3).
 
-   ```xml
-   <key>RTCAppGroupIdentifier</key>
-   <string>group.io.kagami.sender</string>
-   ```
+## Installing it with a free Apple ID, from Windows
 
-4. **Copy five files into the extension target**, from LiveKit's Flutter example
-   (`client-sdk-flutter/example/ios/LiveKit Broadcast Extension`), overwriting
-   the `SampleHandler.swift` Xcode generated:
+There is no App Store or TestFlight build: both need the $99/year Apple
+Developer Program. A free Apple ID can sign an app for your own device.
 
-   ```
-   SampleHandler.swift  SampleUploader.swift  SocketConnection.swift
-   DarwinNotificationCenter.swift  Atomic.swift
-   ```
+1. Download `Kagami-sideload.ipa` from the latest CI run's artifacts (Actions →
+   CI → a push run on `main` → `kagami-ios-sideload`).
+2. Install **Sideloadly** on Windows, with **iTunes and iCloud from Apple's
+   website** — not the Microsoft Store versions, which Sideloadly cannot talk to.
+3. Plug the iPhone in, trust the computer, open Sideloadly, drop the IPA on it,
+   sign in with the Apple ID, Start.
+4. On the iPhone: **Settings → General → VPN & Device Management** → trust your
+   Apple ID. On iOS 16 and later also **Settings → Privacy & Security →
+   Developer Mode** → on, and restart.
 
-   They are deliberately **not vendored into this repo**: they are the upstream
-   plumbing flutter_webrtc's iOS path expects, and a stale copy here would fail
-   in ways that look like our bug. Pin the SDK version you copied them from in
-   the commit message.
+Limits of a free Apple ID: the signature **expires after 7 days** (re-run
+Sideloadly to renew; nothing in the app is lost), at most 3 sideloaded apps at
+once, and 10 new app IDs a week — this one uses two, the app and its extension.
 
-5. In the copied `SampleHandler.swift`, set `appGroupIdentifier` to
-   `group.io.kagami.sender`.
+## Using it
 
-Then: run the app, start mirroring, and pick **aircast** from the screen-record
-long-press in Control Center.
+Open Kagami, scan the desktop's code or type it, **Start mirroring**. iOS shows
+its broadcast picker with **Kagami** selected: **Start Broadcast**. The red
+indicator in the status bar is the capture; Kagami keeps itself awake behind
+it by playing silence (`Kagami/KagamiKeepAlive.m` says why), mixed so music
+keeps playing. Stop from the red indicator or from Kagami.
 
-## Why this shape, and what is likely to change
+## Not yet proven on a phone
 
-`docs/research/transport-webrtc-vs-custom.md` recorded that **every ReplayKit
-capture entry point is deprecated as of iOS 27**, with Apple's own note that
-"ScreenCaptureKit replaces ReplayKit for screen streaming and mirroring. A
-broadcast extension is no longer necessary." ScreenCaptureKit on iOS was still
-beta when that was written.
+CI proves the bundle is put together right. These are what only a device can
+answer, in the order to check them:
 
-So this extension is the path that works now, not the path that lasts. When
-ScreenCaptureKit on iOS ships properly, the whole extension target — App Group,
-socket, five copied files — collapses into in-app capture with `screen-capture`
-in the **host app's** `UIBackgroundModes`. Note the trap recorded in
-`docs/research/stack-options.md` §3: that key in an *extension's* Info.plist is
-an App Store rejection. It belongs to the ScreenCaptureKit path, in the host
-app, and nowhere else.
+1. The picker lists **Kagami** and starting it reaches the desktop at all —
+   the App Group reaching the free-Apple-ID signature is the likeliest failure,
+   and shows as a broadcast that runs while the desktop never gets a frame.
+2. Mirroring survives switching to another app for more than 30 seconds (the
+   keep-alive).
+3. A long session stays under the extension's memory ceiling — LiveKit's
+   uploader JPEG-encodes every frame in the extension
+   (`docs/research/stack-options.md` §5.4).

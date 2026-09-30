@@ -17,6 +17,7 @@ It writes, from a 2048 px master rendered with 4x supersampling:
     installer/kagami.ico                    exe resource, MSI, shortcut
     receiver/icons/kagami-256.png           hicolor, for the GTK window
     sender/android/app/src/main/res/mipmap-*/ic_launcher.png
+    sender/ios/Kagami/AppIcon.appiconset/   one 1024 px square; iOS draws the rest
 
 Pillow only, which is the one image dependency a Windows box here already has.
 """
@@ -47,8 +48,12 @@ CENTRE = (256, 250)
 SEAM = 11                   # the gap between the halves, at MASTER
 
 
-def master() -> Image.Image:
-    """The mark at MASTER*SS, ready to be resized down to anything."""
+def master(radius: int = RADIUS) -> Image.Image:
+    """The mark at MASTER*SS, ready to be resized down to anything.
+
+    radius 0 is the full-bleed square iOS wants: it masks the corners itself,
+    and a rounded tile under its mask would show a ring of transparency.
+    """
     n = MASTER * SS
     img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
 
@@ -64,15 +69,17 @@ def master() -> Image.Image:
     # The rounded square is a mask, so the gradient keeps its corners.
     mask = Image.new("L", (n, n), 0)
     ImageDraw.Draw(mask).rounded_rectangle(
-        (0, 0, n - 1, n - 1), radius=RADIUS * SS, fill=255)
+        (0, 0, n - 1, n - 1), radius=radius * SS, fill=255)
     img.paste(ground, (0, 0), mask)
 
     d = ImageDraw.Draw(img)
 
     # A hairline of sky along the top edge, which is what keeps the tile from
     # dissolving into a dark taskbar.
-    d.rounded_rectangle((0, 0, n - 1, n - 1), radius=RADIUS * SS,
-                        outline=RIM + (255,), width=max(1, 2 * SS))
+    # Not on the full-bleed square: iOS's mask would cut it into four stubs.
+    if radius:
+        d.rounded_rectangle((0, 0, n - 1, n - 1), radius=radius * SS,
+                            outline=RIM + (255,), width=max(1, 2 * SS))
 
     cx, cy = (c * SS for c in CENTRE)
     r = CIRCLE_R * SS
@@ -128,6 +135,23 @@ SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="51
 """
 
 
+IOS_CONTENTS = """{
+  "images" : [
+    {
+      "filename" : "Icon-1024.png",
+      "idiom" : "universal",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+"""
+
+
 def hexof(rgb):
     return "%02x%02x%02x" % rgb
 
@@ -162,6 +186,16 @@ def main() -> None:
                           (144, "xxhdpi"), (192, "xxxhdpi")):
         png(img, size, ROOT / "sender" / "android" / "app" / "src" / "main"
             / "res" / f"mipmap-{density}" / "ic_launcher.png")
+
+    # iOS: one 1024 px image and a single-size catalog, from which Xcode renders
+    # every size the device asks for. No alpha channel -- iOS fills transparency
+    # with black -- and no rounded corners or rim, which its own mask replaces.
+    # tools/scaffold-ios.sh copies the set over the template's Flutter logo.
+    ios = ROOT / "sender" / "ios" / "Kagami" / "AppIcon.appiconset"
+    ios.mkdir(parents=True, exist_ok=True)
+    master(radius=0).resize((1024, 1024), Image.LANCZOS).convert("RGB").save(ios / "Icon-1024.png")
+    (ios / "Contents.json").write_text(IOS_CONTENTS, encoding="utf-8")
+    print("  sender/ios/Kagami/AppIcon.appiconset  1024px")
 
 
 if __name__ == "__main__":

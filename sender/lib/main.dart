@@ -343,7 +343,10 @@ class _SenderPageState extends State<SenderPage> {
                     _Header(
                       casting: _casting,
                       connected: _connected,
-                      onScan: !_casting && Platform.isAndroid && !_busy ? _scan : null,
+                      // Both phones have a camera; only the desktop build has not.
+                      onScan: !_casting && (Platform.isAndroid || Platform.isIOS) && !_busy
+                          ? _scan
+                          : null,
                     ),
                     // Centred while there is room and scrollable when there is not.
                     // The card is a fixed height and the keyboard takes about half
