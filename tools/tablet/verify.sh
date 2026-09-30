@@ -21,6 +21,10 @@ run_ps() { powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$H
 up() { grep -ac "jitter buffer" "$LOG"; }
 wait_up() { for _ in $(seq 1 30); do [ "$(up)" -ge "$1" ] && return 0; sleep 1; done; return 1; }
 echo "output in $OUT"
+# Keep the screen on while the cable is in, for the length of the run only.
+stayon=$("$ADB" shell settings get global stay_on_while_plugged_in | tr -d '')
+"$ADB" shell svc power stayon usb
+trap '"$ADB" shell settings put global stay_on_while_plugged_in "$stayon"' EXIT
 
 taskkill //IM kagami.exe //F >/dev/null 2>&1; sleep 1
 # env -u HOME: Git Bash hands over HOME=/c/Users/..., which GLib believes.
