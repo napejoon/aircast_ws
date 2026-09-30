@@ -1,0 +1,26 @@
+# docker compose up -d --build   (from this directory, on the VPS)
+#
+# Configuration is the same /etc/aircast/signal.env the systemd unit read
+# (server/README.md); nothing about it moves into this file or the image.
+services:
+  signal:
+    build: .
+    image: kagami-signal
+    container_name: kagami-signal
+    # Host networking, not a port mapping. client_ip() believes X-Forwarded-For
+    # only from a peer on 127.0.0.1 -- nginx on this host. Through a mapped
+    # port every connection arrives from the docker bridge's gateway instead,
+    # the header is ignored, and the per-IP join throttle then counts every
+    # user as one address: ten joins a minute for the whole world. With the
+    # host's network the server binds 127.0.0.1:8443 exactly as before, and
+    # nginx needs no change.
+    network_mode: host
+    env_file: /etc/aircast/signal.env
+    restart: unless-stopped
+    # What the systemd unit's hardening amounted to, in docker's terms.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }

@@ -30,6 +30,18 @@ jobs:
         # tools/ carries the end-to-end test: two real WebRTC peers pair through
         # the real server and decoded video has to move.
         run: pytest -q
+      - name: Container
+        # The image the VPS runs (server/compose.yaml), started the way compose
+        # starts it -- host network, read-only root, no capabilities -- and
+        # paired through. Port 8453 so nothing else on the runner is in the way.
+        run: |
+          docker build -t kagami-signal server
+          docker run -d --name signal --network host --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            -e AIRCAST_TURN_SECRET=ci -e AIRCAST_TURN_URLS=turn:127.0.0.1:3478 \
+            -e AIRCAST_PORT=8453 kagami-signal
+          for _ in $(seq 1 20); do docker logs signal 2>&1 | grep -q listening && break; sleep 0.5; done
+          python server/smoke.py ws://127.0.0.1:8453 || { docker logs signal; exit 1; }
 
   receiver:
     name: receiver (GTK4 + GStreamer)
