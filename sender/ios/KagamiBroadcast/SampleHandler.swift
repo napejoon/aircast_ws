@@ -7,15 +7,10 @@
 // Jitsi Meet. tools/scaffold-ios.sh fetches the other four files of that
 // extension -- SampleUploader, SocketConnection, DarwinNotificationCenter,
 // Atomic -- at a pinned commit, checked by hash. This one is ours because it is
-// the file that names the App Group, and because of two changes:
-//
-// - The App Group is read from this extension's Info.plist, not written here.
-//   The same string sits in the app's Info.plist (flutter_webrtc reads it
-//   there) and in both entitlements, and a fourth copy in code is the one that
-//   would drift.
-// - os_log with a format string rather than string interpolation. The
-//   interpolating overload is iOS 14, and the floor this app keeps is the one
-//   flutter_webrtc and Flutter set, not the one a log line sets.
+// the file that names the App Group, and it reads it from this extension's
+// Info.plist rather than writing it here: the same string sits in the app's
+// Info.plist (flutter_webrtc reads it there) and in both entitlements, and a
+// fourth copy in code is the one that would drift.
 
 import OSLog
 import ReplayKit

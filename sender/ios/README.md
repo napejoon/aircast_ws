@@ -22,12 +22,12 @@ The result is the `kagami-ios-sideload` artifact: `Kagami-sideload.ipa`.
 
 ## Which iOS
 
-**The floor is what Flutter and flutter_webrtc allow** — the scaffold prints it
-(`iOS floor: …`) and the IPA's `MinimumOSVersion` carries it; 13 at the time of
-writing. Below that the app cannot be built at all, by anyone. Two changes keep
-the extension from raising it: LiveKit's `os_log` string interpolation is iOS 14
-only, so the scaffold rewrites those two lines to format strings, and our
-`SampleHandler.swift` uses format strings too.
+**iOS 15 and later**, which is every iPhone from the 6s and the first SE on
+(2015). The floor is Flutter's own — the scaffold prints it (`iOS floor: …`) and
+the IPA's `MinimumOSVersion` carries it — and nothing built with this Flutter
+runs below it; flutter_webrtc (13) and mobile_scanner (12) would go lower. An
+iPhone that cannot update past iOS 12 (the 6 and older) would need an old
+Flutter and old plugins for the whole app, Android included.
 
 **Every version from the floor through iOS 27 uses the same path.** Apple
 deprecated ReplayKit's capture entry points in iOS 27 in favour of

@@ -52,6 +52,9 @@ for k in CFBundleShortVersionString CFBundleVersion MinimumOSVersion; do
 done
 key "$APP" UIBackgroundModes | grep -q audio || fail "no audio background mode (Kagami/KagamiKeepAlive.m)"
 key "$APP" NSCameraUsageDescription >/dev/null || fail "no camera string: the scanner would crash the app"
+# Compiled in, not merely listed: the class names are in the binaries.
+grep -q KagamiKeepAlive "$APP/Runner" || fail "KagamiKeepAlive is not in the app binary"
+grep -q SampleHandler "$EXT/KagamiBroadcast" || fail "SampleHandler is not in the extension binary"
 
 rm -rf Payload Kagami-sideload.ipa
 mkdir Payload && cp -R "$APP" Payload/

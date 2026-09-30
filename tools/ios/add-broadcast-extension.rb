@@ -87,7 +87,8 @@ runner.add_file_references([runner_group.new_file('KagamiKeepAlive.m')])
 
 project.save
 order = runner.build_phases.map(&:display_name)
-puts "#{NAME} added (floor iOS #{floor}); Runner phases: #{order.join(' > ')}"
+# To stderr: stdout's last line is the bundle id the caller captures.
+$stderr.puts "#{NAME} added (floor iOS #{floor}); Runner phases: #{order.join(' > ')}"
 if (t = order.index('Thin Binary')) && order.index('Embed App Extensions') > t
   abort 'Embed App Extensions landed after Thin Binary'
 end

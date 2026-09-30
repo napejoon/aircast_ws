@@ -31,18 +31,9 @@ done <<'EOF'
 b3bc86bdb7021c3c56564da90c9e10595e7f93c2c22bc46972e10c287727b05c DarwinNotificationCenter.swift
 a82f18f6a0648acfa416b0fd5addb44d40bb0fcf881a4c384d3498ac1b9ac295 Atomic.swift
 EOF
-# Two log lines use os_log's interpolating overload, which is iOS 14 and would
-# set the floor by itself. Same messages, format-string overload.
-perl -0pi -e 's/"client stream error occurred: \\\(String\(describing: aStream\.streamError\)\)"\)/"client stream error occurred: %{public}\@", String(describing: aStream.streamError))/; s/"failure: \\\(status\)"\)/"failure: %d", status)/' \
-  KagamiBroadcast/SocketConnection.swift
-if grep -nE 'os_log\(.*\\\(' KagamiBroadcast/*.swift; then
-  echo "an interpolating os_log is left (iOS 14 only)" >&2
-  exit 1
-fi
-
-# The floor. Flutter's own, from the project it just generated, and no lower
-# than 13 -- flutter_webrtc's podspec (WebRTC-SDK) and mobile_scanner's (12)
-# are the other two floors, and 13 is the higher.
+# The floor: Flutter's own, from the project it just generated (15.0 in
+# 2026-09), and never below flutter_webrtc's 13 or mobile_scanner's 12. Below
+# Flutter's no app built with it runs at all.
 flutter_floor=$(grep -m1 -oE 'IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+' Runner.xcodeproj/project.pbxproj | grep -oE '[0-9.]+$')
 floor=$(printf '%s\n13.0\n' "$flutter_floor" | sort -t. -k1,1n -k2,2n | tail -1)
 echo "iOS floor: $floor (Flutter's: $flutter_floor)"
