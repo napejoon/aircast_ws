@@ -77,9 +77,13 @@ done
 
 glib-compile-schemas --targetdir="$R/share/glib-2.0/schemas" "$BREW/share/glib-2.0/schemas"
 gio-querymodules "$R/lib/gio/modules" || true
-cp -R "$BREW/share/icons/Adwaita" "$R/share/icons/"
-cp -R "$BREW/share/icons/hicolor" "$R/share/icons/" 2>/dev/null || mkdir -p "$R/share/icons/hicolor"
+# Dereferenced (-L): a bundle carries files, not links into a Cellar that the
+# next Mac does not have, and codesign --strict refuses a link that leaves the
+# bundle. Homebrew's hicolor is every other formula's icons by symlink, so only
+# its index.theme comes along, for our own icon to sit in.
+cp -RL "$BREW/share/icons/Adwaita" "$R/share/icons/"
 mkdir -p "$R/share/icons/hicolor/256x256/apps"
+cp -L "$BREW/share/icons/hicolor/index.theme" "$R/share/icons/hicolor/"
 cp "$HERE/../receiver/icons/kagami-256.png" "$R/share/icons/hicolor/256x256/apps/kagami.png"
 for theme in Adwaita hicolor; do
   gtk4-update-icon-cache --force --quiet "$R/share/icons/$theme" 2>/dev/null || true
@@ -135,7 +139,9 @@ codesign --force --sign - "$OUT"
 leaks=$(find "$C" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) -print0 \
   | xargs -0 -n1 otool -L 2>/dev/null | grep -E "^\s+($BREW|/usr/local|/opt/homebrew)" || true)
 [ -z "$leaks" ] || { echo "still linked into Homebrew:"; echo "$leaks"; exit 1; } >&2
-codesign --verify --deep --strict "$OUT"
+links=$(find "$C" -type l)
+[ -z "$links" ] || { echo "symlinks left in the bundle:"; echo "$links" | head; exit 1; } >&2
+codesign --verify --deep --strict --verbose=2 "$OUT"
 
 # The same element list the Windows bundle proves, loaded from the bundle only.
 ELEMENTS="
