@@ -207,6 +207,13 @@ jobs:
         run: |
           python -m venv .venv && . .venv/bin/activate
           pip install -q -r server/requirements.txt -r tools/requirements.txt
+          # Cairo, on this runner only. It has no GPU, so macOS compiles GTK's GL
+          # shaders in software emulation: `sample` caught the main thread in
+          # glePrepareShaderForEmulation for the first 34 s, painting the first
+          # frame while the join it had queued waited behind it. A Mac has the
+          # GPU and keeps GTK's GL renderer; what this step tests is the bundle,
+          # the network and the picture, and cairo draws all three.
+          export GSK_RENDERER=cairo
           sudo mv /opt/homebrew /opt/homebrew.hidden
           trap 'pkill -f Kagami.app/Contents/MacOS/kagami; sudo mv /opt/homebrew.hidden /opt/homebrew' EXIT
           AIRCAST_TURN_SECRET=ci AIRCAST_TURN_URLS=turn:127.0.0.1:3478 AIRCAST_PORT=8453 \
