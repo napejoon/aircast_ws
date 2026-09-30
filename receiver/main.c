@@ -56,6 +56,12 @@
 #include <d3d11.h>
 #endif
 
+#ifdef __APPLE__
+#include <limits.h>             /* PATH_MAX */
+#include <mach-o/dyld.h>        /* _NSGetExecutablePath, to find the .app */
+#include <stdlib.h>             /* realpath */
+#endif
+
 #include "update_check.h"
 
 
@@ -270,6 +276,60 @@ harden_environment (gboolean prebuild)
    * choice, not this call, is what makes the application directory safe. */
   SetDefaultDllDirectories (LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
   SetDllDirectoryW (L"");
+#endif
+
+#ifdef __APPLE__
+  /* The macOS build ships as Kagami.app (tools/bundle-macos.sh), and unlike
+   * the Windows DLLs nothing in it finds its data by walking up from itself:
+   * Homebrew's GStreamer, GIO and GLib were built with absolute paths into
+   * /opt/homebrew. Inside the bundle every one of those is pointed at the
+   * bundle's own copy, and set rather than defaulted -- a Mac with Homebrew's
+   * GStreamer installed has plugins of another build on those paths, and
+   * loading one into this process is two copies of libgstreamer in one
+   * address space. Outside a bundle (a build tree, `cmake --build`) nothing is
+   * touched, which is the Linux behaviour and for the same reason. */
+  char exe[PATH_MAX];
+  char real[PATH_MAX];
+  uint32_t exe_len = sizeof exe;
+  if (_NSGetExecutablePath (exe, &exe_len) == 0 && realpath (exe, real)) {
+    gchar *macos = g_path_get_dirname (real);
+    if (g_str_has_suffix (macos, ".app/Contents/MacOS")) {
+      gchar *contents = g_path_get_dirname (macos);
+      gchar *res = g_build_filename (contents, "Resources", NULL);
+      gchar *plugins = g_build_filename (res, "lib", "gstreamer-1.0", NULL);
+      gchar *scanner = g_build_filename (macos, "gst-plugin-scanner", NULL);
+      /* Its own registry, not ~/Library/Caches/gstreamer-1.0: that one is
+       * shared with any other GStreamer on the machine, and two plugin sets
+       * taking turns in one cache rescan each other on every launch. */
+      gchar *registry = g_build_filename (g_get_user_cache_dir (), "Kagami", "registry.bin", NULL);
+      /* libsoup's wss:// is glib-networking's TLS module; without it the
+       * signalling socket fails with "TLS/SSL support not available". */
+      gchar *gio = g_build_filename (res, "lib", "gio", "modules", NULL);
+      gchar *schemas = g_build_filename (res, "share", "glib-2.0", "schemas", NULL);
+      gchar *share = g_build_filename (res, "share", NULL);
+      g_unsetenv ("GST_PLUGIN_PATH");
+      g_unsetenv ("GST_PLUGIN_PATH_1_0");
+      g_unsetenv ("GST_PLUGIN_SYSTEM_PATH");
+      g_setenv ("GST_PLUGIN_SYSTEM_PATH_1_0", plugins, TRUE);
+      g_setenv ("GST_PLUGIN_SCANNER_1_0", scanner, TRUE);
+      g_setenv ("GST_REGISTRY_1_0", registry, TRUE);
+      g_unsetenv ("GIO_EXTRA_MODULES");
+      g_unsetenv ("GIO_USE_TLS");
+      g_setenv ("GIO_MODULE_DIR", gio, TRUE);
+      g_setenv ("GSETTINGS_SCHEMA_DIR", schemas, TRUE);
+      /* Icons: the bundle's Adwaita and hicolor, and nobody else's. */
+      g_setenv ("XDG_DATA_DIRS", share, TRUE);
+      g_free (share);
+      g_free (schemas);
+      g_free (gio);
+      g_free (registry);
+      g_free (scanner);
+      g_free (plugins);
+      g_free (res);
+      g_free (contents);
+    }
+    g_free (macos);
+  }
 #endif
 }
 
@@ -1598,6 +1658,9 @@ on_connected (GObject *session, GAsyncResult *result, gpointer user_data)
   if (error) {
     gchar *msg = g_strdup_printf ("Cannot reach the signalling server: %s. Retrying",
         error->message);
+    /* To the log as well: a TLS module missing from a bundle reads here, and
+     * nowhere else, as "TLS/SSL support not available". */
+    g_printerr ("signalling: %s\n", msg);
     set_status (self, msg);
     g_free (msg);
     g_error_free (error);
@@ -1616,6 +1679,7 @@ on_connected (GObject *session, GAsyncResult *result, gpointer user_data)
   /* Connected, so the next disconnection starts its backoff from one second
    * again rather than from wherever the last outage left it. */
   self->reconnect_delay = 1;
+  g_printerr ("signalling: connected\n");
 
   g_signal_connect (self->ws, "message", G_CALLBACK (on_message), self);
   g_signal_connect (self->ws, "closed", G_CALLBACK (on_ws_closed), self);

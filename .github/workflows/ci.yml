@@ -162,6 +162,92 @@ jobs:
           path: sender/Kagami-sideload.ipa
           if-no-files-found: error
 
+  macos:
+    name: receiver (macOS app)
+    # Kagami.app for Apple Silicon, from Homebrew's GTK and GStreamer
+    # (tools/bundle-macos.sh). Nobody maintaining this has a Mac, so this job is
+    # also the test: the app is started from the bundle and a fake phone casts
+    # to it, and it connects to the real server over TLS.
+    runs-on: macos-latest
+    env:
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install
+        # gstreamer carries gst-plugins-rs, gtk4paintablesink included; the
+        # nice plugin is its own formula; glib-networking is wss://.
+        run: |
+          brew install pkgconf cmake gtk4 gstreamer libnice-gstreamer json-glib \
+            libsoup libsodium qrencode glib-networking adwaita-icon-theme dylibbundler
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else echo "VERSION=0.0.0" >> "$GITHUB_ENV"; fi
+      - name: Build
+        run: |
+          cmake -S receiver -B build -DCMAKE_BUILD_TYPE=Release -DAIRCAST_VERSION="$VERSION"
+          cmake --build build
+      - name: Self-test
+        run: ./build/kagami --selftest
+      - name: Bundle
+        run: AIRCAST_VERSION="$VERSION" bash tools/bundle-macos.sh build dist/Kagami.app
+      - name: Cast to the bundled app
+        # A local server, tools/fake_sender.py as the phone, and the app run
+        # from inside the bundle -- main.c then points GStreamer, GIO and GTK
+        # at the bundle, so Homebrew being installed on the runner proves less
+        # than it would otherwise. The window is photographed for the log.
+        run: |
+          python3 -m venv .venv && . .venv/bin/activate
+          pip install -q -r server/requirements.txt -r tools/requirements.txt
+          AIRCAST_TURN_SECRET=ci AIRCAST_TURN_URLS=turn:127.0.0.1:3478 AIRCAST_PORT=8453 \
+            python server/aircast_signal.py > server.log 2>&1 &
+          sleep 2
+          dist/Kagami.app/Contents/MacOS/kagami --signal ws://127.0.0.1:8453 --insecure \
+            --code 424242 > receiver.log 2>&1 &
+          sleep 8
+          python tools/fake_sender.py --signal ws://127.0.0.1:8453 --code 424242 \
+            --seconds 40 > sender.log 2>&1 &
+          for _ in $(seq 1 60); do grep -q "jitter buffer" receiver.log && break; sleep 1; done
+          sleep 6
+          screencapture -x cast.png || true
+          pkill -f Kagami.app/Contents/MacOS/kagami || true
+          cat receiver.log
+          grep -q "jitter buffer" receiver.log
+      - name: TLS from the bundle
+        # The real server, over wss://: glib-networking's module inside the
+        # bundle, or "TLS/SSL support not available".
+        run: |
+          dist/Kagami.app/Contents/MacOS/kagami > tls.log 2>&1 &
+          for _ in $(seq 1 20); do grep -q "signalling:" tls.log && break; sleep 1; done
+          pkill -f Kagami.app/Contents/MacOS/kagami || true
+          cat tls.log
+          grep -q "signalling: connected" tls.log
+      - name: Disk image
+        run: |
+          arch=$(uname -m)
+          hdiutil create -volname Kagami -srcfolder dist/Kagami.app -ov -format UDZO \
+            "Kagami-$VERSION-macos-$arch.dmg"
+          ls -l Kagami-*.dmg
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        # Pushes only, for the reason the APK is.
+        if: github.event_name == 'push'
+        with:
+          name: kagami-macos
+          path: Kagami-*.dmg
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        # What the window looked like, and why, whichever way the job went.
+        if: always()
+        with:
+          name: kagami-macos-evidence
+          path: |
+            cast.png
+            receiver.log
+            sender.log
+            server.log
+            tls.log
+          if-no-files-found: ignore
+
   paintablesink:
     name: gtk4paintablesink (the plugin apt does not ship)
     runs-on: ubuntu-24.04
