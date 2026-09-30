@@ -44,6 +44,12 @@ sender/ios/Runner/
 sender/ios/Runner.xcodeproj/
 sender/ios/Runner.xcworkspace/
 sender/ios/Flutter/
+# Fetched by tools/scaffold-ios.sh at a pinned, hash-checked commit.
+sender/ios/KagamiBroadcast/SampleUploader.swift
+sender/ios/KagamiBroadcast/SocketConnection.swift
+sender/ios/KagamiBroadcast/DarwinNotificationCenter.swift
+sender/ios/KagamiBroadcast/Atomic.swift
+sender/Kagami-sideload.ipa
 
 # CMake
 receiver/build/

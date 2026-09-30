@@ -132,6 +132,36 @@ jobs:
           path: sender/Kagami-debug.apk
           if-no-files-found: error
 
+  ios:
+    name: sender (iOS)
+    # The only place this project can build for iOS: nobody maintaining it has
+    # a Mac. What it proves is that the app, the Broadcast Upload Extension and
+    # the App Group come out as one bundle a sideloading tool can sign
+    # (tools/ios/package-ipa.sh checks each piece). Whether it mirrors is a
+    # question for a phone -- sender/ios/README.md.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+      - name: Restore the scaffold, with the extension
+        run: bash tools/scaffold-ios.sh
+      - name: Build
+        # Release: a debug Flutter app on iOS only starts under a debugger, and
+        # a sideloaded one has none.
+        working-directory: sender
+        run: flutter build ios --release --no-codesign
+      - name: Package for sideloading
+        run: bash tools/ios/package-ipa.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        # Pushes only, for the reason the APK is.
+        if: github.event_name == 'push'
+        with:
+          name: kagami-ios-sideload
+          path: sender/Kagami-sideload.ipa
+          if-no-files-found: error
+
   paintablesink:
     name: gtk4paintablesink (the plugin apt does not ship)
     runs-on: ubuntu-24.04
